@@ -12,14 +12,7 @@ type MemoryStore struct {
 	mu      sync.Mutex
 	streams map[string][]LiveEvent
 	signals map[string]chan struct{}
-	leases  map[string]expiringValue
-	cancels map[string]expiringValue
 	nextID  int64
-}
-
-type expiringValue struct {
-	value     string
-	expiresAt time.Time
 }
 
 // NewMemoryStore creates an empty test live store.
@@ -27,8 +20,6 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		streams: make(map[string][]LiveEvent),
 		signals: make(map[string]chan struct{}),
-		leases:  make(map[string]expiringValue),
-		cancels: make(map[string]expiringValue),
 	}
 }
 
@@ -81,52 +72,6 @@ func (s *MemoryStore) Read(ctx context.Context, runID, afterID string, block tim
 			return nil, nil
 		}
 	}
-}
-
-// SetLease records a disposable lease for its requested lifetime.
-func (s *MemoryStore) SetLease(ctx context.Context, runID, owner string, ttl time.Duration) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if ttl <= 0 {
-		ttl = LeaseTTL
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.leases[runID] = expiringValue{value: owner, expiresAt: time.Now().Add(ttl)}
-	return nil
-}
-
-// RequestCancel records a disposable cancellation hint for its requested lifetime.
-func (s *MemoryStore) RequestCancel(ctx context.Context, runID string, ttl time.Duration) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if ttl <= 0 {
-		ttl = CancelTTL
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cancels[runID] = expiringValue{value: "1", expiresAt: time.Now().Add(ttl)}
-	return nil
-}
-
-// IsCancelRequested reports whether the cancellation hint has not expired.
-func (s *MemoryStore) IsCancelRequested(ctx context.Context, runID string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	value, ok := s.cancels[runID]
-	if !ok {
-		return false, nil
-	}
-	if !time.Now().Before(value.expiresAt) {
-		delete(s.cancels, runID)
-		return false, nil
-	}
-	return true, nil
 }
 
 func (s *MemoryStore) signalFor(runID string) chan struct{} {

@@ -40,8 +40,10 @@ from .contracts import (
 )
 from .conditions import evaluate_postcondition_list, unmet_summary
 from .evidence import EvidenceCollector, capture_screenshot
+from .environments import EnvironmentProvider, ProviderError
 from .locators import LocatorResolutionError, to_playwright_locator
 from .observer import new_id, observe_page
+from .uploads import scoped_upload_root
 
 #: 本机 Playwright 浏览器的默认位置；只在环境变量未设置时兜底（见 NOTES）
 DEFAULT_BROWSERS_PATH = r"D:\PlaywrightBrowsers"
@@ -83,6 +85,9 @@ class WorkerSession:
         self.page = page
         self.evidence = EvidenceCollector(page)
         self.closed = False
+        self.project_id = None
+        self.environment_id = None
+        self.initial_storage_state = None
 
     async def close(self) -> None:
         if self.closed:
@@ -102,11 +107,24 @@ class SessionManager:
         self._browser: Browser | None = None
         self._sessions: dict[str, WorkerSession] = {}
         self._lock = asyncio.Lock()
+        self.environments = EnvironmentProvider()
+        self._cleanup_uncertain = False
 
     # ---- 浏览器生命周期 ----
 
+    def mark_cleanup_uncertain(self, error: BaseException) -> None:
+        self._cleanup_uncertain = True
+
+    def require_ready(self) -> None:
+        if self._cleanup_uncertain:
+            raise ProviderError(
+                503, "cleanup_uncertain",
+                "Browser context cleanup is uncertain; worker restart required",
+            )
+
     async def browser(self) -> Browser:
         """取共享浏览器；首次调用时启动 Playwright 与 chromium。"""
+        self.require_ready()
         if self._browser is not None and self._browser.is_connected():
             return self._browser
         async with self._lock:
@@ -122,6 +140,7 @@ class SessionManager:
             return self._browser
 
     async def shutdown(self) -> None:
+        await self.environments.shutdown()
         for session in list(self._sessions.values()):
             await session.close()
         self._sessions.clear()
@@ -147,6 +166,9 @@ class SessionManager:
         browser = await self.browser()
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await context.new_page()
+        return self.register(session_id, context, page)
+
+    def register(self, session_id, context, page) -> WorkerSession:
         # 兜底超时：不让任何漏传 timeout 的 Playwright 调用吃默认的 30s
         page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)
         page.set_default_navigation_timeout(DEFAULT_STEP_TIMEOUT_MS)
@@ -162,18 +184,27 @@ class SessionManager:
 
     async def close(self, session_id: str) -> bool:
         session = self.get(session_id)
-        await session.close()
+        if session.environment_id:
+            await self.environments.close(session)
+        else:
+            await session.close()
         self._sessions.pop(session_id, None)
+        # Dispose known resources, but do not acknowledge release of a leaked dry run.
+        self.require_ready()
         return True
 
     # ---- 会话上的动作 ----
 
     async def navigate(self, session_id: str, url: str) -> Observation:
+        self.require_ready()
         session = self.get(session_id)
+        if session.environment_id:
+            self.environments.check_navigation(session, url)
         await goto(session.page, url, DEFAULT_STEP_TIMEOUT_MS)
         return await self.observe(session)
 
     async def act(self, session_id: str, request: ActRequest) -> ActResponse:
+        self.require_ready()
         session = self.get(session_id)
         page = session.page
         url_before = page.url
@@ -203,7 +234,13 @@ class SessionManager:
         elif request.action == "dismiss_dialog":
             await dismiss_dialog(page, locator, DEFAULT_STEP_TIMEOUT_MS)
         elif request.action == "upload_file":
-            await upload_file_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
+            await upload_file_target(
+                page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS,
+                upload_root=scoped_upload_root(
+                    f"{session.environment_id}_g{session.profile_generation}"
+                    if session.environment_id else session.session_id
+                ),
+            )
         elif request.action in ("assert_element", "assert_attribute", "assert_count"):
             # Target assertions only resolve their locator; their postconditions do the evaluation.
             pass

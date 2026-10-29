@@ -1,8 +1,11 @@
 import { fileURLToPath } from "node:url";
+import type { EventEmitter } from "node:events";
+import type { Readable, Writable } from "node:stream";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { z } from "zod";
 
 import { BROWSER_TOOL_SCHEMAS } from "./schemas.js";
 import { encodeToolOutcome } from "./tool-result.js";
@@ -59,8 +62,25 @@ export function createBrowserMcpServer(
   );
 
   const queue = new PromiseQueue();
-  let builderClosed = false;
-  let serverClosed = false;
+  let builderClosing: Promise<void> | undefined;
+  let serverClosing: Promise<void> | undefined;
+
+  // SDK stdio close ignores child exit status. Hosts must await this acknowledgement
+  // before transport teardown to distinguish release from uncertain cleanup.
+  mcp.server.setRequestHandler(z.object({ method: z.literal("browser/close") }), async () => {
+    await closeBuilderOnce();
+    return { closed: true };
+  });
+
+  // Pi exposes managed MCP tools, but not arbitrary client requests. The harness
+  // hides this lifecycle alias from the model and calls it before SDK shutdown.
+  mcp.tool("close_session", "Acknowledge authoring browser cleanup", {}, async () => {
+    await closeBuilderOnce();
+    return {
+      content: [],
+      structuredContent: { closed: true },
+    };
+  });
 
   for (const schema of BROWSER_TOOL_SCHEMAS) {
     mcp.tool(
@@ -69,6 +89,7 @@ export function createBrowserMcpServer(
       schema.inputSchema,
       async (args) => {
         try {
+          if (builderClosing) throw new Error("browser session is closing");
           const outcome = await queue.enqueue(() =>
             builder.call(schema.name, args as Record<string, unknown>),
           );
@@ -78,8 +99,19 @@ export function createBrowserMcpServer(
             // Close only the builder; leave the MCP transport open so the SDK
             // can write the error response to the client. The production
             // onFatal callback terminates the child afterwards.
-            await closeBuilderOnce();
-            options.onFatal?.(error);
+            try {
+              await closeBuilderOnce();
+            } finally {
+              options.onFatal?.(error);
+            }
+            if (error.result?.redacted_args?.length) {
+              return {
+                ...encodeToolOutcome({ result: {
+                  ...error.result, ok: false, error: error.code, detail: error.message,
+                } }),
+                isError: true,
+              };
+            }
           }
           throw error;
         }
@@ -88,26 +120,25 @@ export function createBrowserMcpServer(
   }
 
   /** Idempotently closes the authoring browser session (builder) only. */
-  async function closeBuilderOnce(): Promise<void> {
-    if (builderClosed) return;
-    builderClosed = true;
-    try {
-      await builder.close();
-    } catch {
-      // best-effort cleanup
-    }
+  function closeBuilderOnce(): Promise<void> {
+    builderClosing ??= queue.enqueue(() => builder.close());
+    return builderClosing;
   }
 
   /** Idempotently closes the builder and the MCP transport. */
-  async function closeOnce(): Promise<void> {
-    if (serverClosed) return;
-    serverClosed = true;
-    await closeBuilderOnce();
-    try {
-      await mcp.close();
-    } catch {
-      // transport already gone
-    }
+  function closeOnce(): Promise<void> {
+    serverClosing ??= (async () => {
+      try {
+        await closeBuilderOnce();
+      } finally {
+        try {
+          await mcp.close();
+        } catch {
+          // transport already gone; builder cleanup rejection still propagates
+        }
+      }
+    })();
+    return serverClosing;
   }
 
   return {
@@ -117,7 +148,10 @@ export function createBrowserMcpServer(
       // process exit both run.
       const previousOnClose = transport.onclose;
       transport.onclose = () => {
-        void closeOnce().finally(() => previousOnClose?.());
+        void closeOnce().then(
+          () => previousOnClose?.(),
+          () => previousOnClose?.(),
+        );
       };
       await mcp.connect(transport);
     },
@@ -130,33 +164,71 @@ export function createBrowserMcpServer(
  * and goal from the environment, builds the worker client and case builder,
  * and serves MCP on stdin/stdout.
  */
-export async function runStdioServer(): Promise<void> {
-  const workerUrl = requiredEnv("AGENTTRACE_HARNESS_WORKER_URL");
-  const artifactScope = requiredEnv("AGENTTRACE_HARNESS_ARTIFACT_SCOPE");
-  const goal = requiredEnv("AGENTTRACE_HARNESS_GOAL");
+export interface StdioServerOptions {
+  input?: Readable;
+  output?: Writable;
+  process?: Pick<EventEmitter, "on" | "off"> & { exit(code: number): void };
+  builder?: BrowserMcpBuilder;
+}
 
-  const worker = new WorkerClient(workerUrl);
-  const builder = await CaseBuilder.create({ worker, artifactScope, goal });
+export async function runStdioServer(options: StdioServerOptions = {}): Promise<void> {
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const proc = options.process ?? process;
+  const builder = options.builder ?? await CaseBuilder.create({
+    worker: new WorkerClient(requiredEnv("AGENTTRACE_HARNESS_WORKER_URL"), {
+      ...(process.env.AGENTTRACE_BROWSER_PROVIDER_TOKEN ? {
+        providerToken: process.env.AGENTTRACE_BROWSER_PROVIDER_TOKEN,
+      } : {}),
+      ...(process.env.AGENTTRACE_HARNESS_ENVIRONMENT_ID ? {
+        environmentLease: {
+          project_id: requiredEnv("AGENTTRACE_HARNESS_PROJECT_ID"),
+          environment_id: requiredEnv("AGENTTRACE_HARNESS_ENVIRONMENT_ID"),
+          profile_generation: Number(requiredEnv("AGENTTRACE_HARNESS_PROFILE_GENERATION")),
+          fencing_token: Number(requiredEnv("AGENTTRACE_HARNESS_FENCING_TOKEN")),
+        },
+      } : {}),
+    }),
+    artifactScope: requiredEnv("AGENTTRACE_HARNESS_ARTIFACT_SCOPE"),
+    goal: requiredEnv("AGENTTRACE_HARNESS_GOAL"),
+  });
 
   const server = createBrowserMcpServer(builder, {
     onFatal: () => {
       // Give the error response a chance to flush, then terminate the child.
-      setTimeout(() => process.exit(1), 0);
+      setTimeout(() => void shutdown(1), 0);
     },
   });
 
-  const transport = new StdioServerTransport();
-  transport.onclose = () => {
-    void server.close().then(() => process.exit(0));
+  let shuttingDown: Promise<void> | undefined;
+  const shutdown = (code = 0): Promise<void> => {
+    shuttingDown ??= server.close().then(() => code, (error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }).then((exitCode) => {
+      input.off("end", onShutdown);
+      proc.off("SIGTERM", onShutdown);
+      proc.off("SIGINT", onShutdown);
+      proc.exit(exitCode);
+    });
+    return shuttingDown;
   };
-
-  const onSignal = (): void => {
-    void server.close().then(() => process.exit(0));
+  const onShutdown = (): void => {
+    void shutdown();
   };
-  process.on("SIGTERM", onSignal);
-  process.on("SIGINT", onSignal);
+  const transport = new StdioServerTransport(input, output);
+  transport.onclose = onShutdown;
+  // MCP SDK 1.20's server transport does not emit onclose on stdin EOF.
+  input.once("end", onShutdown);
+  proc.on("SIGTERM", onShutdown);
+  proc.on("SIGINT", onShutdown);
 
-  await server.connect(transport);
+  try {
+    await server.connect(transport);
+  } catch (error) {
+    await shutdown(1);
+    throw error;
+  }
 }
 
 function requiredEnv(name: string): string {

@@ -1,7 +1,10 @@
-import { Bot } from 'lucide-react';
-import { useMemo } from 'react';
+import { Bot, Settings2 } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
 import type { Message, Run } from '../../api';
 import { Composer } from './Composer';
+import { RunExecutionSummary } from './RunExecutionSummary';
+import { HarnessManager } from '../harness/HarnessManager';
+import type { ExecutionCatalogState } from '../harness/useExecutionCatalog';
 import {
   formatMessageDate,
   formatMessageTime,
@@ -13,6 +16,7 @@ import type { WorkspaceState } from '../workspace/useWorkspace';
 
 interface Props {
   workspace: WorkspaceState;
+  catalog?: ExecutionCatalogState;
 }
 
 interface TaskTimelineEntry {
@@ -49,7 +53,9 @@ function formatAttemptDuration(run: Run): string {
   return minutes === 0 ? `${String(seconds)}s` : `${String(minutes)}m ${String(seconds % 60)}s`;
 }
 
-export function ConversationPane({ workspace }: Props): JSX.Element {
+export function ConversationPane({ workspace, catalog }: Props): JSX.Element {
+  const [managingHarnesses, setManagingHarnesses] = useState(false);
+  const managerId = useId();
   const runsBySource = useMemo(() => {
     const grouped = new Map<string, Run[]>();
     for (const run of workspace.conversation?.runs ?? []) {
@@ -155,7 +161,26 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
             <code>{workspace.run.id.slice(0, 12)}</code>
           </div>
         ) : null}
+        {catalog !== undefined ? (
+          <button
+            type="button"
+            className="button harness-manager-toggle"
+            aria-label="Manage Harnesses"
+            aria-expanded={managingHarnesses}
+            aria-controls={managerId}
+            onClick={() => setManagingHarnesses((open) => !open)}
+          >
+            <Settings2 size={14} />
+            Harnesses
+          </button>
+        ) : null}
       </header>
+      {workspace.run !== null ? <RunExecutionSummary run={workspace.run} spans={workspace.spans} /> : null}
+      {catalog !== undefined && managingHarnesses ? (
+        <div id={managerId} className="harness-manager-region">
+          <HarnessManager catalog={catalog} />
+        </div>
+      ) : null}
 
       <section className="message-history" aria-label="Message history" aria-live="polite">
         {workspace.selection.conversationId === null ? (
@@ -173,7 +198,9 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
           <div className="center-empty">
             <Bot size={28} />
             <h3>Start an evaluation</h3>
-            <p>Select an authorized agent and model, then describe the goal.</p>
+            <p>{catalog === undefined
+              ? 'Select an authorized agent and model, then describe the goal.'
+              : 'Select a Runtime and Harness, then describe the goal.'}</p>
           </div>
         ) : (
           timeline.entries.map((entry) => {
@@ -305,12 +332,19 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
             {workspace.streamError}
           </div>
         ) : null}
+        {catalog?.error != null && !managingHarnesses ? (
+          <div className="inline-error" role="alert">{catalog.error}</div>
+        ) : null}
       </section>
 
       {workspace.selection.conversationId !== null ? (
         <Composer
           agents={workspace.agents}
-          busy={workspace.busy}
+          runtimes={catalog?.runtimes}
+          harnesses={catalog?.harnesses}
+          harnessId={catalog?.harnessId}
+          onSelectHarness={catalog?.selectHarness}
+          busy={workspace.busy || catalog?.loading === true}
           runStatus={workspace.run?.status ?? null}
           onSend={workspace.sendMessage}
           onCancel={workspace.requestCancel}

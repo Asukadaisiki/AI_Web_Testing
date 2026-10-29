@@ -1,0 +1,80 @@
+{
+  "started_at": "2026-10-28T14:08:50.733834+00:00",
+  "browser": "isolated Playwright Chromium",
+  "method": "Visible UI actions only; read-only DOM inspection; no API substitution",
+  "langfuse_project_id": "agenttrace-native-project",
+  "agenttrace_project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+  "commands": [],
+  "checks": [],
+  "checkpoints": [],
+  "network": [
+    {
+      "at": "2026-10-28T14:08:51.848632+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.conversations",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.900591+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.runtimes",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.934016+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.mcpDefinitions",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.934631+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.list",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.957249+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.skills",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.960187+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.mcpBindings",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.962555+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.environment",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:08:51.969501+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.harnesses",
+      "status": 200
+    }
+  ],
+  "page_errors": [],
+  "owned": {},
+  "gaps": [],
+  "status": "failed",
+  "error": "Locator.set_input_files: Error: [webkitdirectory] input requires passing a path to a directory\nCall log:\n  - waiting for get_by_label(\"Skill folder\", exact=True)\n    - locator resolved to <input multiple type=\"file\" webkitdirectory=\"\" class=\"mt-1 block max-w-full text-xs\"/>\n",
+  "updated_at": "2026-10-28T14:08:52.036597+00:00",
+  "corrections": [],
+  "totals": {
+    "passed_checks": 0,
+    "failed_checks_preserved": 0,
+    "screenshots": 0
+  },
+  "coverage_limits": [
+    "Only Pi was run through the UI; other SDKs belong to separate parent API acceptance.",
+    "No live viewer or RBAC-role-switch acceptance; contract tests are not browser evidence.",
+    "Drain/Resume used an offline idle project runtime registration, not a live worker.",
+    "The intentional cancellation workload did not create a case or fresh-context dry run.",
+    "Existing MCP binding was inspected and selected, not rewritten."
+  ],
+  "artifact_finalized_at": "2026-10-28T14:08:52.073912+00:00"
+}

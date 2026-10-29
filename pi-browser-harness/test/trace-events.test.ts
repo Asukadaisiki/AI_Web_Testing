@@ -124,10 +124,15 @@ describe("mapPiEvent", () => {
       "pi.message.completed",
       "pi.usage",
     ]);
-    expect(events[0]?.payload).toEqual({ text: "cart verified" });
+    expect(events[0]?.payload).toEqual({
+      text: "cart verified", provider: "scripted", model: "browser-fixture",
+    });
     expect(events[1]?.payload).toEqual({
+      provider: "scripted", model: "browser-fixture",
       input_tokens: 10,
       output_tokens: 5,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
     });
   });
 
@@ -514,24 +519,19 @@ describe("mapPiEvent", () => {
     },
   );
 
-  it("emits harness.settled only on agent_settled with the last assistant text", () => {
+  it("leaves settlement to the selected harness completion policy", () => {
     const state = createTraceMapperState();
     mapPiEvent(assistantMessage("final answer"), state);
 
     const events = mapPiEvent(settled, state);
 
-    expect(events).toEqual([
-      {
-        type: "harness.settled",
-        payload: { assistant_text: "final answer" },
-      },
-    ]);
+    expect(events).toEqual([]);
   });
 
-  it("harness.settled carries an empty assistant text when no message completed", () => {
+  it("does not synthesize settlement when no message completed", () => {
     const state = createTraceMapperState();
     const events = mapPiEvent(settled, state);
 
-    expect(events[0]?.payload).toEqual({ assistant_text: "" });
+    expect(events).toEqual([]);
   });
 });

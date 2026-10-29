@@ -62,10 +62,15 @@ func TestFallbackResumesLiveReadsWhenRedisRecovers(t *testing.T) {
 		{Sequence: 1, Type: "run.started", Data: json.RawMessage(`{"state":"running"}`)},
 	}}
 	store := newRecoveringLiveStore()
+	store.onRecovery = func() {
+		reader.Append(DurableEvent{
+			Sequence: 2, Type: "span.completed", Data: json.RawMessage(`{"span":"recovered"}`),
+		})
+	}
 	if err := store.Append(context.Background(), "run-1", live.LiveEvent{
-		Type: "token.delta", Data: json.RawMessage(`{"delta":"recovered"}`),
+		Type: "run.events.available", Data: json.RawMessage(`{}`),
 	}); err != nil {
-		t.Fatalf("append recovered token delta: %v", err)
+		t.Fatalf("append recovered notice: %v", err)
 	}
 	service := NewService(reader, store, Config{
 		ReadBlock:    10 * time.Millisecond,
@@ -80,7 +85,7 @@ func TestFallbackResumesLiveReadsWhenRedisRecovers(t *testing.T) {
 		ID: "1", Type: "run.started", Data: json.RawMessage(`{"state":"running"}`),
 	})
 	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
-		Type: "token.delta", Data: json.RawMessage(`{"delta":"recovered"}`),
+		ID: "2", Type: "span.completed", Data: json.RawMessage(`{"span":"recovered"}`),
 	})
 	assertNoStreamError(t, streamErrs)
 }
@@ -112,7 +117,7 @@ func TestLiveEventsAfterDurableSequenceAreNotDuplicated(t *testing.T) {
 		t.Fatalf("append duplicate durable notice: %v", err)
 	}
 	if err := liveStore.Append(context.Background(), "run-1", live.LiveEvent{
-		Type: "token.delta", Data: json.RawMessage(`{"delta":"hello"}`),
+		Type: "token.delta", Data: json.RawMessage(`{"delta":"untrusted"}`),
 	}); err != nil {
 		t.Fatalf("append token delta: %v", err)
 	}
@@ -125,8 +130,51 @@ func TestLiveEventsAfterDurableSequenceAreNotDuplicated(t *testing.T) {
 	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
 		ID: "1", Type: "run.started", Data: json.RawMessage(`{"state":"running"}`),
 	})
+	select {
+	case event := <-events:
+		t.Fatalf("Redis payload or duplicate durable event escaped: %#v", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	assertNoStreamError(t, streamErrs)
+}
+
+func TestSequenceZeroNotificationWakesDurableRead(t *testing.T) {
+	reader := &memoryDurableReader{}
+	store := &noticeLiveStore{
+		events: []live.LiveEvent{{ID: "1-0", Type: "run.events.available", Data: json.RawMessage(`{}`)}},
+		onFirstRead: func() {
+			reader.Append(DurableEvent{Sequence: 1, Type: "run.started", Data: json.RawMessage(`{"status":"running"}`)})
+		},
+	}
+	service := NewService(reader, store, Config{ReadBlock: time.Minute, PollInterval: time.Minute})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, streamErrs := service.Subscribe(ctx, "run-1", "")
 	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
-		Type: "token.delta", Data: json.RawMessage(`{"delta":"hello"}`),
+		ID: "1", Type: "run.started", Data: json.RawMessage(`{"status":"running"}`),
+	})
+	assertNoStreamError(t, streamErrs)
+}
+
+func TestDurablePollingContinuesWithoutRedisNotifications(t *testing.T) {
+	reader := &memoryDurableReader{}
+	store := &noticeLiveStore{
+		onFirstRead: func() {
+			reader.Append(DurableEvent{Sequence: 1, Type: "run.started", Data: json.RawMessage(`{}`)})
+		},
+	}
+	service := NewService(reader, store, Config{
+		ReadBlock: time.Minute, PollInterval: 10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, streamErrs := service.Subscribe(ctx, "run-1", "")
+	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
+		ID: "1", Type: "run.started", Data: json.RawMessage(`{}`),
+	})
+	reader.Append(DurableEvent{Sequence: 2, Type: "run.finished", Data: json.RawMessage(`{}`)})
+	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
+		ID: "2", Type: "run.finished", Data: json.RawMessage(`{}`),
 	})
 	assertNoStreamError(t, streamErrs)
 }
@@ -226,21 +274,10 @@ func (unavailableLiveStore) Read(context.Context, string, string, time.Duration)
 	return nil, errors.New("redis is unavailable")
 }
 
-func (unavailableLiveStore) SetLease(context.Context, string, string, time.Duration) error {
-	return errors.New("redis is unavailable")
-}
-
-func (unavailableLiveStore) RequestCancel(context.Context, string, time.Duration) error {
-	return errors.New("redis is unavailable")
-}
-
-func (unavailableLiveStore) IsCancelRequested(context.Context, string) (bool, error) {
-	return false, errors.New("redis is unavailable")
-}
-
 type recoveringLiveStore struct {
 	*live.MemoryStore
-	failed bool
+	failed     bool
+	onRecovery func()
 }
 
 func newRecoveringLiveStore() *recoveringLiveStore {
@@ -253,6 +290,10 @@ func (s *recoveringLiveStore) Read(
 	if !s.failed {
 		s.failed = true
 		return nil, errors.New("redis is unavailable")
+	}
+	if s.onRecovery != nil {
+		s.onRecovery()
+		s.onRecovery = nil
 	}
 	return s.MemoryStore.Read(ctx, runID, afterID, block)
 }
@@ -288,18 +329,6 @@ func (s *noticeLiveStore) Read(
 	case <-time.After(block):
 		return nil, nil
 	}
-}
-
-func (s *noticeLiveStore) SetLease(context.Context, string, string, time.Duration) error {
-	return errors.New("set lease is not supported")
-}
-
-func (s *noticeLiveStore) RequestCancel(context.Context, string, time.Duration) error {
-	return errors.New("request cancel is not supported")
-}
-
-func (s *noticeLiveStore) IsCancelRequested(context.Context, string) (bool, error) {
-	return false, errors.New("read cancel is not supported")
 }
 
 func receiveStreamEvent(t *testing.T, events <-chan StreamEvent) StreamEvent {

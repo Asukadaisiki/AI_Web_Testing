@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 # --------------------------------------------------------------------------------------
 # 常量
@@ -682,6 +682,23 @@ class OpenSessionRequest(BaseModel):
     model_config = _CONTRACT_CONFIG
 
     session_id: str = Field(min_length=1)
+    project_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,160}$")
+    environment_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,160}$")
+    profile_generation: int | None = Field(default=None, gt=0, strict=True)
+    fencing_token: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def complete_environment_identity(self):
+        supplied = (self.environment_id, self.profile_generation, self.fencing_token)
+        if any(value is not None for value in supplied) and not all(
+            value is not None for value in supplied
+        ):
+            raise ValueError("environment_id, profile_generation and fencing_token are required together")
+        if self.environment_id is not None and self.project_id is None:
+            raise ValueError("managed sessions require project_id")
+        if self.project_id is not None and self.environment_id is None:
+            raise ValueError("project_id requires Environment identity")
+        return self
 
 
 # --------------------------------------------------------------------------------------
@@ -833,12 +850,21 @@ class ActResponse(BaseModel):
     error: StepError | None = None
 
 
-class ExecuteRequest(BaseModel):
+class ExecuteRequest(OpenSessionRequest):
     model_config = _CONTRACT_CONFIG
 
     #: 必填：每步截图要落进 `<产物根>/<session_id>/`（CONTRACT §9.2）。
     session_id: str = Field(min_length=1)
+    browser_session_id: str | None = Field(default=None, min_length=1)
     case: dict[str, Any]
+
+    @model_validator(mode="after")
+    def held_environment_session(self):
+        if self.browser_session_id is not None and self.environment_id is None:
+            raise ValueError("browser_session_id requires Environment identity")
+        if self.environment_id is not None and self.browser_session_id is None:
+            raise ValueError("managed execution requires browser_session_id")
+        return self
 
 
 class ErrorResponse(BaseModel):

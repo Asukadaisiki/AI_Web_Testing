@@ -23,6 +23,7 @@ import {
 import { GroundingError, resolveTarget } from "./grounding.js";
 import { buildPageView, type PageView } from "./observation-view.js";
 import { FailureLedger } from "./failure-ledger.js";
+import { PasswordSecrets } from "./password-secrets.js";
 import {
   WorkerTransportError,
   type WorkerClient,
@@ -87,6 +88,8 @@ export interface ToolResult {
   steps?: StepView[];
   candidates?: unknown[];
   failure?: DryRunFailure;
+  /** Value-free marker lets the host redact corresponding transcript arguments. */
+  redacted_args?: string[];
 }
 
 export interface StepView {
@@ -141,7 +144,9 @@ export class CaseBuilder implements ReplayContext {
   #hasPage = false;
   #steps: Step[] = [];
   #failures = new FailureLedger();
-  #closed = false;
+  #closing: Promise<void> | undefined;
+  readonly #secrets = new PasswordSecrets();
+  #redactedArgs: string[] = [];
 
   private constructor(deps: CaseBuilderDeps) {
     this.#worker = deps.worker;
@@ -167,7 +172,7 @@ export class CaseBuilder implements ReplayContext {
   }
 
   get committedSteps(): readonly Step[] {
-    return this.#steps.map((step) => ({ ...step }));
+    return this.#secrets.redact(this.#steps);
   }
 
   get browserSessionId(): string {
@@ -238,24 +243,21 @@ export class CaseBuilder implements ReplayContext {
   }
 
   pageViewOf(observation: Observation): PageView {
-    return buildPageView(observation, this.#goal, null);
+    return this.#secrets.redact(buildPageView(observation, this.#goal, null));
   }
 
   stepViewsOf(steps: readonly Step[]): StepView[] {
-    return stepViews(steps);
+    return this.#secrets.redact(stepViews(steps));
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    if (this.#browserSessionId !== "") {
-      try {
+  close(): Promise<void> {
+    this.#closing ??= (async () => {
+      if (this.#browserSessionId !== "") {
         await this.#worker.closeSession(this.#browserSessionId);
-      } catch {
-        // Closing is best-effort; the session is owned by the worker.
+        this.#browserSessionId = "";
       }
-      this.#browserSessionId = "";
-    }
+    })();
+    return this.#closing;
   }
 
   async call(
@@ -263,6 +265,32 @@ export class CaseBuilder implements ReplayContext {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<ToolOutcome> {
+    this.#redactedArgs = [];
+    try {
+      const outcome = await this.callPrivate(toolName, args, signal);
+      if (this.#redactedArgs.length) outcome.result.redacted_args = this.#redactedArgs;
+      return this.#secrets.redact(outcome);
+    } catch (error) {
+      if (error instanceof FatalCaseBuilderError) {
+        const result = error.result ?? { ok: false, error: error.code };
+        if (this.#redactedArgs.length) result.redacted_args = this.#redactedArgs;
+        throw new FatalCaseBuilderError(
+          error.code, this.#secrets.redact(error.message), this.#secrets.redact(result),
+        );
+      }
+      const message = errorMessage(error);
+      const redacted = this.#secrets.redact(message);
+      if (redacted === message) throw error;
+      throw new Error(redacted);
+    }
+  }
+
+  private async callPrivate(
+    toolName: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolOutcome> {
+    if (this.#closing) throw new Error("browser session is closing");
     switch (toolName) {
       case "open_page":
         return {
@@ -436,9 +464,6 @@ export class CaseBuilder implements ReplayContext {
     const intent = stringArg(args, "intent");
     const expects = parseExpects(args);
     const observation = this.#observation;
-    if (this.#failures.failed(observation, action, candidateId || undefined, spec, hint)) {
-      return strategyRepeated();
-    }
     let grounded: {
       element: { name?: string | null; text?: string | null; ref: string };
       locator: Locator;
@@ -454,6 +479,30 @@ export class CaseBuilder implements ReplayContext {
         },
         observation,
       );
+      const candidate = observation.action_candidates.find(
+        (item) => item.candidate_id === resolved.candidate_id,
+      );
+      if ((resolved.element.attributes?.type ?? candidate?.attributes?.type)?.toLowerCase() === "password") {
+        for (const field of [
+          ...(action === "input" ? ["value"] : []),
+          "expect_value",
+        ]) {
+          if (typeof args[field] === "string") {
+            this.#secrets.add(args[field]);
+            this.#redactedArgs.push(field);
+          }
+        }
+        const attribute = expects.attribute;
+        const separator = attribute?.indexOf("=") ?? -1;
+        if (attribute && separator >= 0 &&
+          attribute.slice(0, separator).trim().toLowerCase() === "value") {
+          this.#secrets.add(attribute);
+          this.#secrets.add(attribute.slice(separator + 1).trim());
+          this.#redactedArgs.push("expect_attribute");
+          return failure("secret_assertion_disallowed",
+            "password value attributes cannot be asserted; use expect_value for a private comparison");
+        }
+      }
       grounded = {
         element: resolved.element,
         locator: resolved.locator,
@@ -471,6 +520,9 @@ export class CaseBuilder implements ReplayContext {
         hint,
       );
       return failure(code, errorMessage(error));
+    }
+    if (this.#failures.failed(observation, action, candidateId || undefined, spec, hint)) {
+      return strategyRepeated();
     }
     const targetHint =
       hint.trim() !== ""
@@ -753,7 +805,7 @@ export class CaseBuilder implements ReplayContext {
     execution: ExecutionResult,
     signal?: AbortSignal,
   ): Promise<ToolResult> {
-    return runPrepareDryRunRepair(this, execution, signal);
+    return this.#secrets.redact(await runPrepareDryRunRepair(this, execution, signal));
   }
 
   private assertionFailure(

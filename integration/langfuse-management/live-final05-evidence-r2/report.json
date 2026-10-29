@@ -1,0 +1,178 @@
+{
+  "started_at": "2026-10-28T14:09:31.770675+00:00",
+  "browser": "isolated Playwright Chromium",
+  "method": "Visible UI actions only; read-only DOM inspection; no API substitution",
+  "langfuse_project_id": "agenttrace-native-project",
+  "agenttrace_project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+  "commands": [],
+  "checks": [
+    {
+      "name": "invalid-skill-name-visible-feedback-and-disabled",
+      "passed": true
+    },
+    {
+      "name": "valid-skill-name-enabled-without-submission",
+      "passed": true
+    },
+    {
+      "name": "services-heartbeat-lag-counters-and-audit-rendered",
+      "passed": true
+    }
+  ],
+  "checkpoints": [
+    {
+      "at": "2026-10-28T14:09:33.142805+00:00",
+      "name": "invalid-skill-name",
+      "screenshot": "01-invalid-skill-name.png",
+      "url": "http://127.0.0.1:3300/project/agenttrace-native-project/browser-runs",
+      "visible_text": "v3.225.14 OSS\nGo to...\n\u2318\nK\nHome\nDashboards\nObservability\nTracing\nSessions\nAgent runs\nUsers\nPrompt Management\nPrompts\nPlayground\nEvaluation\nScores\nEvaluators\nHuman Annotation\nDatasets\nLangfuse v4 is available\nLangfuse v3 no longer receives feature updates. Upgrade to v4 to get the latest features and improvements.\nUpgrade guide\u2192\nSettings\nBook a call\nSupport\nAL\nAgentTrace Local\n[REDACTED]\nToggle Sidebar\nAgentTrace Native Local\nAgentTrace Local Acceptance\nAgent runs\nAgent runs\n\nProject conversations, persistent browser environments and versioned runtime capabilities.\n\nConversation\nSelect conversation\nBrowser workspace\nLangfuse BFF acceptance 2026-10-28T13:02:52.415Z (archived)\nUI acceptance run 20261028-212222\nManagement faults post-sideeffect-crash d6538204\nFinal version smoke 577c264c\nNew conversation\nArchive conversation\nDelete conversation\nRuns\nEnvironment\nRegistry\nServices\nSkills\nMCP bindings\nHarnesses\nSkill packages\n\nUpload a folder or ZIP with root SKILL.md. Preview drafts before publishing. Revoked versions cannot be selected for new Harnesses.\n\nSkill name\n\nUse 1-128 characters: start with a letter or digit, then use only letters, digits, dots, underscores or hyphens. No spaces.\n\nUse 1-128 characters: start with a letter or digit, then use only letters, digits, dots, underscores or hyphens. No spaces.\n\nSkill folder\nSkill ZIP\n\nSKILL.md\n\nUpload draft\nbrowser-case-authoring v1\npublished\nPreview\nRevoke\nmanagement-acceptance-50e4f38d26df v2\npublished\nPreview\nRevoke\nmanagement-acceptance-50e4f38d26df v1\nrevoked\nPreview\nmanagement-acceptance-f0a6b3514de9 v1\npublished\nPreview\nRevoke\nui-acceptance-skill-20261028-212222 v1\npublished\nPreview\nRevoke\n\n/project/agenttrace-native-project/browser-runs",
+      "privacy_crop": {
+        "reason": "Center crop excludes the fixed sidebar account email; no page pixels synthesized",
+        "original_dimensions": [
+          1440,
+          1100
+        ],
+        "retained_bounds": [
+          0,
+          26,
+          1440,
+          1074
+        ]
+      },
+      "sha256": "cdfd51add06f86093e78e734724d99b21c6ff5c4ce0f0fdaef2be02bb9a95791",
+      "bytes": 173455,
+      "dimensions": [
+        1440,
+        1048
+      ]
+    },
+    {
+      "at": "2026-10-28T14:09:33.207486+00:00",
+      "name": "valid-skill-name",
+      "screenshot": "02-valid-skill-name.png",
+      "url": "http://127.0.0.1:3300/project/agenttrace-native-project/browser-runs",
+      "visible_text": "v3.225.14 OSS\nGo to...\n\u2318\nK\nHome\nDashboards\nObservability\nTracing\nSessions\nAgent runs\nUsers\nPrompt Management\nPrompts\nPlayground\nEvaluation\nScores\nEvaluators\nHuman Annotation\nDatasets\nLangfuse v4 is available\nLangfuse v3 no longer receives feature updates. Upgrade to v4 to get the latest features and improvements.\nUpgrade guide\u2192\nSettings\nBook a call\nSupport\nAL\nAgentTrace Local\n[REDACTED]\nToggle Sidebar\nAgentTrace Native Local\nAgentTrace Local Acceptance\nAgent runs\nAgent runs\n\nProject conversations, persistent browser environments and versioned runtime capabilities.\n\nConversation\nSelect conversation\nBrowser workspace\nLangfuse BFF acceptance 2026-10-28T13:02:52.415Z (archived)\nUI acceptance run 20261028-212222\nManagement faults post-sideeffect-crash d6538204\nFinal version smoke 577c264c\nNew conversation\nArchive conversation\nDelete conversation\nRuns\nEnvironment\nRegistry\nServices\nSkills\nMCP bindings\nHarnesses\nSkill packages\n\nUpload a folder or ZIP with root SKILL.md. Preview drafts before publishing. Revoked versions cannot be selected for new Harnesses.\n\nSkill name\n\nUse 1-128 characters: start with a letter or digit, then use only letters, digits, dots, underscores or hyphens. No spaces.\n\nSkill folder\nSkill ZIP\n\nSKILL.md\n\nUpload draft\nbrowser-case-authoring v1\npublished\nPreview\nRevoke\nmanagement-acceptance-50e4f38d26df v2\npublished\nPreview\nRevoke\nmanagement-acceptance-50e4f38d26df v1\nrevoked\nPreview\nmanagement-acceptance-f0a6b3514de9 v1\npublished\nPreview\nRevoke\nui-acceptance-skill-20261028-212222 v1\npublished\nPreview\nRevoke\n\n/project/agenttrace-native-project/browser-runs",
+      "privacy_crop": {
+        "reason": "Center crop excludes the fixed sidebar account email; no page pixels synthesized",
+        "original_dimensions": [
+          1440,
+          1100
+        ],
+        "retained_bounds": [
+          0,
+          26,
+          1440,
+          1074
+        ]
+      },
+      "sha256": "9b166450e5d8d609c32c0d2f6af47c2f75858367b6d96f431284d4810c3b033e",
+      "bytes": 166105,
+      "dimensions": [
+        1440,
+        1048
+      ]
+    },
+    {
+      "at": "2026-10-28T14:09:33.425442+00:00",
+      "name": "services-observability",
+      "screenshot": "03-services-observability.png",
+      "url": "http://127.0.0.1:3300/project/agenttrace-native-project/browser-runs",
+      "visible_text": "v3.225.14 OSS\nGo to...\n\u2318\nK\nHome\nDashboards\nObservability\nTracing\nSessions\nAgent runs\nUsers\nPrompt Management\nPrompts\nPlayground\nEvaluation\nScores\nEvaluators\nHuman Annotation\nDatasets\nLangfuse v4 is available\nLangfuse v3 no longer receives feature updates. Upgrade to v4 to get the latest features and improvements.\nUpgrade guide\u2192\nSettings\nBook a call\nSupport\nAL\nAgentTrace Local\n[REDACTED]\nToggle Sidebar\nAgentTrace Native Local\nAgentTrace Local Acceptance\nAgent runs\nAgent runs\n\nProject conversations, persistent browser environments and versioned runtime capabilities.\n\nConversation\nSelect conversation\nBrowser workspace\nLangfuse BFF acceptance 2026-10-28T13:02:52.415Z (archived)\nUI acceptance run 20261028-212222\nManagement faults post-sideeffect-crash d6538204\nFinal version smoke 577c264c\nNew conversation\nArchive conversation\nDelete conversation\nRuns\nEnvironment\nRegistry\nServices\nService health\napi\nok (api_instance)\nbrowser_worker\nok\nexporter\nok (process_liveness_heartbeat; does_not_assert_export_delivery; completed_iteration_heartbeat)\nkafka\nok\nlangfuse\nok\noutbox_queue\nno_backlog (project_queue_age)\noutbox_relay\nok (completed_iteration_heartbeat)\npostgres\nok\nredis\nok\n\nruns.cancelled\n\n1\n\nruns.failed\n\n1\n\nruns.running\n\n1\n\nenvironments.leased\n\n1\n\nenvironments.needs_review\n\n1\n\nenvironments.ready\n\n3\n\nactive_leases\n\n1\n\nexpired_leases\n\n1\n\nlost_attempts\n\n1\n\npending_outbox\n\n0\n\noldest_outbox_seconds\n\nUnavailable\n\nNo pending outbox age measurement is available.\n\ndlq_count\n\n0\n\nScope: project_retained_outbox_handoffs. Retained handoffs, not Kafka queue depth.\n\ndlq_count\n\n0\n\nmeasured\n\nScope: project_retained_outbox_handoffs\n\nretained_handoffs_for_current_project_aggregates; excludes_kafka_only_and_deleted_aggregates\n\nexporter_health\n\nUnavailable\n\nok\n\nScope: deployment_process\n\nprocess_liveness_heartbeat; does_not_assert_export_delivery; completed_iteration_heartbeat\n\nObserved: 2026-10-28T22:09:30.765814+08:00\n\nkafka_consumer_lag\n\nUnavailable\n\nunmeasured\n\nScope: deployment_consumer_group\n\noffset_not_committed\n\nConsumer group: agenttrace-management-runtime-acceptance\n\nTopic: agenttrace.run.commands.v1\n\nlease_contention\n\nUnavailable\n\nunmeasured\n\nScope: project\n\nno_durable_counter_observations\n\noutbox_queue_health\n\nUnavailable\n\nno_backlog\n\nScope: project_queue\n\nno_pending_project_rows; relay_process_liveness_unmeasured\n\noutbox_relay_health\n\nUnavailable\n\nok\n\nScope: deployment_process\n\ncompleted_iteration_heartbeat\n\nObserved: 2026-10-28T22:09:32.159954+08:00\n\nstale_fencing_rejections\n\nUnavailable\n\nunmeasured\n\nScope: project\n\nno_durable_counter_observations\n\nRecent registry audit\nAction\tResource\tTime\nharness.publish\thv_20329b19558f2c84642e9c0421462896\t2026-10-28T21:40:32.866756+08:00\nskill.publish\tsv_fb6fcb0bfe2202a191318a7c507c239d\t2026-10-28T21:40:32.860462+08:00\nskill.upload\tsv_fb6fcb0bfe2202a191318a7c507c239d\t2026-10-28T21:40:32.843062+08:00\nharness.publish\thv_5c0f4876001b792a2191bd37bc756f15\t2026-10-28T21:35:23.588976+08:00\nharness.publish\thv_14da8c47e32588b6363e0d36b5f6ccbd\t2026-10-28T21:34:28.951315+08:00\nharness.publish\thv_29b44aa9c65d0f32b8b8e70b6844f1e2\t2026-10-28T21:25:22.508926+08:00\nskill.publish\tsv_2efa8dcd5620196735a84dd4d2b8b35f\t2026-10-28T21:24:32.97483+08:00\nskill.upload\tsv_2efa8dcd5620196735a84dd4d2b8b35f\t2026-10-28T21:24:32.749112+08:00\nskill.revoke\tsv_24a74445ef28a1b02677554fc7ee23c3\t2026-10-28T21:13:47.026021+08:00\nharness.revoke\thv_88975fa4a7ae626bfb1830e6ca479ed4\t2026-10-28T21:13:47.017514+08:00\nharness.publish\thv_02d3739096b2e7ff57ca949827ee2f0c\t2026-10-28T21:13:47.011896+08:00\nskill.publish\tsv_ae3e96e4a14fc7f1d4e70dc6cb557099\t2026-10-28T21:13:47.009696+08:00\nskill.upload\tsv_ae3e96e4a14fc7f1d4e70dc6cb557099\t2026-10-28T21:13:47.007135+08:00\nharness.publish\thv_88975fa4a7ae626bfb1830e6ca479ed4\t2026-10-28T21:07:21.168982+08:00\nskill.publish\tsv_24a74445ef28a1b02677554fc7ee23c3\t2026-10-28T21:07:21.162785+08:00\nskill.upload\tsv_24a74445ef28a1b02677554fc7ee23c3\t2026-10-28T21:07:21.149267+08:00\nharness.publish\thv_1f7cd44dab3d9f5d674123486ee468ba\t2026-10-28T20:53:11.349374+08:00\nskill.publish\tsv_cf821fbab051e2a3195b658bb8820e3e\t2026-10-28T20:53:11.346259+08:00\nskill.upload\tsv_cf821fbab051e2a3195b658bb8820e3e\t2026-10-28T20:53:11.344379+08:00\nmcp.bind\tbinding_b4c30b8b5c5723e0b1ce94942fa8b740\t2026-10-28T20:53:11.341421+08:00\nWorkers\nWorker\tRole\tVersion\tActive / capacity\tLast heartbeat\tState\tAction\nbrowser-32bce3d4f3efda24dc125822\tbrowser\tbrowser-worker.v3\t1 / 4\t2026-10-28T22:09:31.307934+08:00\tAccepting work\tDrain\nacceptance-runtime-a-20261028\truntime\tagenttrace-runtime.v3\t0 / 2\t2026-10-28T21:43:52.057627+08:00\tOffline\tDrain\nacceptance-runtime-b-20261028\truntime\tagenttrace-runtime.v3\t0 / 2\t2026-10-28T21:45:12.059288+08:00\tOffline\tDrain\nruntime-KDQDT6WYL9-11619-ULN2EVUU4RR25DOBRHBIM4CJFU\truntime\tagenttrace-runtime.v3\t0 / 4\t2026-10-28T21:05:47.526271+08:00\tOffline\tDrain\nruntime-KDQDT6WYL9-17542-ZIX3KB6CIC4VR5DXML3KGKFUOZ\truntime\tagenttrace-runtime.v3\t0 / 4\t2026-10-28T21:28:17.997377+08:00\tOffline\tDrain\nruntime-KDQDT6WYL9-23860-YOFLQD3WIUTIT4OZGZCNPO33FT\truntime\tagenttrace-runtime.v3\t1 / 4\t2026-10-28T22:09:31.305264+08:00\tAccepting work\tDrain\nruntime-KDQDT6WYL9-51297-HSIIBS7I3NCRA2CXSPVSYQENRR\truntime\tagenttrace-runtime.v3\t0 / 4\t2026-10-28T22:07:55.882733+08:00\tOffline\tDrain\n\nDrain stops new assignments while active work completes. Browser and runtime workers remain separate roles.\n\n/project/agenttrace-native-project/browser-runs",
+      "privacy_crop": {
+        "reason": "Center crop excludes the fixed sidebar account email; no page pixels synthesized",
+        "original_dimensions": [
+          1440,
+          1100
+        ],
+        "retained_bounds": [
+          0,
+          26,
+          1440,
+          1074
+        ]
+      },
+      "sha256": "7b23e163c0c12a20b39ae963249860a3f700acb9bb37a420e11538cd3b3a10c0",
+      "bytes": 193574,
+      "dimensions": [
+        1440,
+        1048
+      ]
+    }
+  ],
+  "network": [
+    {
+      "at": "2026-10-28T14:09:32.651809+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.conversations",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.684750+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.runtimes",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.685111+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.list",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.690977+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.environment",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.696858+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.harnesses",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.701494+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.mcpBindings",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.707753+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.skills",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:32.710628+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.mcpDefinitions",
+      "status": 200
+    },
+    {
+      "at": "2026-10-28T14:09:33.288304+00:00",
+      "method": "GET",
+      "path": "/api/trpc/browserRuns.services",
+      "status": 200
+    }
+  ],
+  "page_errors": [],
+  "owned": {},
+  "gaps": [],
+  "updated_at": "2026-10-28T14:09:33.426647+00:00",
+  "status": "passed",
+  "scope": "Final05 deployed read-only UI. File selection only; no upload, run, drain, reset or delete.",
+  "corrections": [],
+  "totals": {
+    "passed_checks": 3,
+    "failed_checks_preserved": 0,
+    "screenshots": 3
+  },
+  "coverage_limits": [
+    "Only Pi was run through the UI; other SDKs belong to separate parent API acceptance.",
+    "No live viewer or RBAC-role-switch acceptance; contract tests are not browser evidence.",
+    "Drain/Resume used an offline idle project runtime registration, not a live worker.",
+    "The intentional cancellation workload did not create a case or fresh-context dry run.",
+    "Existing MCP binding was inspected and selected, not rewritten."
+  ],
+  "artifact_finalized_at": "2026-10-28T14:09:33.677836+00:00"
+}

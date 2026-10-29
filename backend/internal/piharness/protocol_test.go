@@ -69,7 +69,7 @@ func TestDecoderAcceptsValidTerminalStream(t *testing.T) {
 	lines := []string{
 		`{"type":"harness.started","run_id":"run_1","attempt_id":"attempt_1","sequence":1,"timestamp":"2026-10-26T12:34:56.789Z","payload":{}}`,
 		`{"type":"pi.message.completed","run_id":"run_1","attempt_id":"attempt_1","sequence":2,"timestamp":"2026-10-26T12:34:57.000Z","payload":{"text":"cart verified"}}`,
-		`{"type":"harness.settled","run_id":"run_1","attempt_id":"attempt_1","sequence":3,"timestamp":"2026-10-26T12:34:58.000Z","payload":{"assistant_text":"cart verified"}}`,
+		`{"type":"harness.settled","run_id":"run_1","attempt_id":"attempt_1","sequence":3,"timestamp":"2026-10-26T12:34:58.000Z","payload":{"assistant_text":"cart verified","verdict":"succeeded"}}`,
 	}
 
 	for i, line := range lines {
@@ -206,7 +206,7 @@ func TestDecoderRejectsSecondTerminalRecord(t *testing.T) {
 	if _, err := dec.Decode([]byte(first)); err != nil {
 		t.Fatalf("first decode: %v", err)
 	}
-	terminal := `{"type":"harness.settled","run_id":"run_1","attempt_id":"attempt_1","sequence":2,"timestamp":"2026-10-26T12:34:57.000Z","payload":{"assistant_text":"done"}}`
+	terminal := `{"type":"harness.settled","run_id":"run_1","attempt_id":"attempt_1","sequence":2,"timestamp":"2026-10-26T12:34:57.000Z","payload":{"assistant_text":"done","verdict":"succeeded"}}`
 	if _, err := dec.Decode([]byte(terminal)); err != nil {
 		t.Fatalf("terminal decode: %v", err)
 	}

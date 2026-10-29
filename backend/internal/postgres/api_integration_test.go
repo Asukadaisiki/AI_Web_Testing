@@ -113,70 +113,101 @@ func TestCreateRerunIsReturnedByConversationRead(t *testing.T) {
 }
 
 func TestResponsePersistsMessageAndContinuationOutbox(t *testing.T) {
-	ctx, pool, store := newRepositoryTestStore(t)
-	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-		ConversationID: conversationID,
-		Content:        "waiting for approval",
-		AgentID:        "browser-eval",
-		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
-		IdempotencyKey: "message-1",
-	})
-	if err != nil {
-		t.Fatalf("create run: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'waiting_approval' WHERE id = $1`, run.ID); err != nil {
-		t.Fatalf("put run in approval wait: %v", err)
-	}
-
-	if err := store.SubmitResponse(ctx, SubmitResponseParams{
-		RunID:          run.ID,
-		Kind:           "approval",
-		Content:        "approved",
-		IdempotencyKey: "response-1",
-		Continuation:   true,
-	}); err != nil {
-		t.Fatalf("submit response: %v", err)
-	}
-
-	var (
-		content string
+	for _, tc := range []struct {
 		kind    string
-		topic   string
-		payload []byte
-	)
-	if err := pool.QueryRow(ctx, `
+		status  string
+		content string
+	}{
+		{kind: "approval", status: "waiting_approval", content: "approved"},
+		{kind: "question", status: "waiting_input", content: "use the staging cart"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			ctx, pool, store := newRepositoryTestStore(t)
+			conversationID := createConversationFixture(t, ctx, pool)
+			original, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+				ConversationID: conversationID,
+				Content:        "open the cart and verify checkout",
+				AgentID:        "browser-eval",
+				Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
+				IdempotencyKey: "message-1",
+			})
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			if _, err := pool.Exec(ctx, `UPDATE runs SET status = $2 WHERE id = $1`, run.ID, tc.status); err != nil {
+				t.Fatalf("put run in response wait: %v", err)
+			}
+
+			if err := store.SubmitResponse(ctx, SubmitResponseParams{
+				RunID:          run.ID,
+				Kind:           tc.kind,
+				Content:        tc.content,
+				IdempotencyKey: "response-1",
+				Continuation:   true,
+			}); err != nil {
+				t.Fatalf("submit response: %v", err)
+			}
+
+			var (
+				content string
+				kind    string
+				topic   string
+				payload []byte
+			)
+			if err := pool.QueryRow(ctx, `
 		SELECT content, metadata ->> 'response_kind'
 		FROM messages
 		WHERE conversation_id = $1
 		ORDER BY ordinal DESC
 		LIMIT 1`, conversationID).Scan(&content, &kind); err != nil {
-		t.Fatalf("read persisted response: %v", err)
-	}
-	if content != "approved" || kind != "approval" {
-		t.Fatalf("response message = (%q, %q)", content, kind)
-	}
-	if err := pool.QueryRow(ctx, `
+				t.Fatalf("read persisted response: %v", err)
+			}
+			if content != tc.content || kind != tc.kind {
+				t.Fatalf("response message = (%q, %q)", content, kind)
+			}
+			if err := pool.QueryRow(ctx, `
 		SELECT topic, payload
 		FROM outbox_events
 		WHERE key = $1
 		  AND topic = $2
 		  AND payload ->> 'event_type' = 'run.continuation.requested'
 		LIMIT 1`, run.ID, runCommandsTopic).Scan(&topic, &payload); err != nil {
-		t.Fatalf("read continuation outbox: %v", err)
-	}
-	if topic != runCommandsTopic {
-		t.Fatalf("continuation topic = %q, want %q", topic, runCommandsTopic)
-	}
-	var envelope event.Envelope[event.RunCommand]
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		t.Fatalf("decode continuation envelope: %v", err)
-	}
-	if envelope.SchemaVersion != "agenttrace.run-command.v1" {
-		t.Fatalf("continuation schema = %q", envelope.SchemaVersion)
-	}
-	if len(envelope.Payload.Messages) != 1 || envelope.Payload.Messages[0].Content != "approved" {
-		t.Fatalf("continuation payload = %#v", envelope.Payload)
+				t.Fatalf("read continuation outbox: %v", err)
+			}
+			if topic != runCommandsTopic {
+				t.Fatalf("continuation topic = %q, want %q", topic, runCommandsTopic)
+			}
+			var envelope event.Envelope[event.RunCommand]
+			if err := json.Unmarshal(payload, &envelope); err != nil {
+				t.Fatalf("decode continuation envelope: %v", err)
+			}
+			if envelope.SchemaVersion != "agenttrace.run-command.v1" {
+				t.Fatalf("continuation schema = %q", envelope.SchemaVersion)
+			}
+			if len(envelope.Payload.Messages) != 2 {
+				t.Fatalf("continuation payload = %#v", envelope.Payload)
+			}
+			if got := envelope.Payload.Messages[0]; got.ID != original.ID || got.Content != original.Content || got.Role != "user" {
+				t.Fatalf("continuation original goal = %#v, want %#v", got, original)
+			}
+			response := envelope.Payload.Messages[1]
+			var metadata map[string]string
+			if err := json.Unmarshal(response.Metadata, &metadata); err != nil {
+				t.Fatalf("decode queued response metadata: %v", err)
+			}
+			if response.Role != "user" || response.Content != tc.content ||
+				metadata["response_kind"] != tc.kind || metadata["run_id"] != run.ID ||
+				envelope.CausationID != response.ID {
+				t.Fatalf("queued response = %#v, metadata = %#v", response, metadata)
+			}
+			gotRun, err := store.GetRun(ctx, run.ID)
+			if err != nil {
+				t.Fatalf("get resumed run: %v", err)
+			}
+			if string(gotRun.Specification) != string(run.Specification) {
+				t.Fatal("response changed the immutable run specification")
+			}
+		})
 	}
 }
 

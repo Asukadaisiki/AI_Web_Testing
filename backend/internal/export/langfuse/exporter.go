@@ -25,7 +25,6 @@ const (
 	DLQTopic       = "agenttrace.run.dlq.v1"
 
 	runEventSchema    = "agenttrace.event.v1"
-	completionEvent   = "runtime.completed"
 	defaultMaxAttempt = 3
 )
 
@@ -128,17 +127,22 @@ type Observation struct {
 	Metadata            map[string]any `json:"metadata,omitempty"`
 	StartTime           time.Time      `json:"start_time"`
 	EndTime             *time.Time     `json:"end_time,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	UsageDetails        map[string]any `json:"usage_details,omitempty"`
+	CostDetails         map[string]any `json:"cost_details,omitempty"`
+	OccurredAt          time.Time      `json:"-"`
 }
 
 // Exporter validates completion events and mirrors canonical PostgreSQL data.
 type Exporter struct {
-	Repository   Repository
-	Inbox        Inbox
-	RetryStore   RetryStore
-	DeliveryGate DeliveryGate
-	Client       Client
-	SecretFields []string
-	MaxAttempts  int
+	ExportProjectID string
+	Repository      Repository
+	Inbox           Inbox
+	RetryStore      RetryStore
+	DeliveryGate    DeliveryGate
+	Client          Client
+	SecretFields    []string
+	MaxAttempts     int
 }
 
 // Consume subscribes to the sole supported run event topic.
@@ -164,7 +168,7 @@ func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) (handle
 		return e.recordFailure(ctx, eventID, message, err)
 	}
 	eventID = envelope.EventID
-	if envelope.EventType != completionEvent {
+	if !event.IsRunCompletion(envelope.EventType) {
 		return nil
 	}
 	if e.DeliveryGate != nil {
@@ -228,21 +232,9 @@ func decodeEvent(raw []byte) (event.Envelope[json.RawMessage], error) {
 	case strings.TrimSpace(envelope.CorrelationID) == "":
 		return envelope, errors.New("run event correlation id is required")
 	}
-	if envelope.EventType == completionEvent {
-		var completion struct {
-			RunID  string
-			Status string
-		}
-		if err := json.Unmarshal(envelope.Payload, &completion); err != nil {
-			return envelope, errors.New("decode run completion payload")
-		}
-		if completion.RunID != envelope.AggregateID {
-			return envelope, errors.New("run completion payload does not match aggregate")
-		}
-		switch domain.RunStatus(completion.Status) {
-		case domain.RunSucceeded, domain.RunFailed, domain.RunCancelled:
-		default:
-			return envelope, errors.New("run completion status is not terminal")
+	if event.IsRunCompletion(envelope.EventType) {
+		if _, err := event.DecodeRunCompletion(envelope.EventType, envelope.AggregateID, envelope.Payload); err != nil {
+			return envelope, err
 		}
 	}
 	return envelope, nil
@@ -252,13 +244,18 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 	if e.Repository == nil {
 		return errors.New("Langfuse exporter repository is required")
 	}
-	if e.Client == nil {
+	if e.ExportProjectID == "" && e.Client == nil {
 		return errors.New("Langfuse exporter client is required")
 	}
-
 	run, err := e.Repository.GetRun(ctx, envelope.AggregateID)
 	if err != nil {
 		return fmt.Errorf("load canonical run: %w", err)
+	}
+	if e.ExportProjectID != "" && run.ProjectID != e.ExportProjectID {
+		return nil
+	}
+	if e.Client == nil {
+		return errors.New("Langfuse exporter client is required")
 	}
 	if run.ID != envelope.AggregateID || !terminalRun(run.Status) || run.FinishedAt == nil {
 		return errors.New("canonical run completion is not visible")
@@ -285,6 +282,16 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 	}
 
 	batch := buildBatch(project, conversation, messages, run, spans)
+	// PostgreSQL exposes durable usage separately from the public span list.
+	if repository, ok := e.Repository.(interface {
+		GetTraceDetails(context.Context, string) (postgres.TraceDetails, error)
+	}); ok {
+		details, err := repository.GetTraceDetails(ctx, run.ID)
+		if err != nil {
+			return fmt.Errorf("load canonical usage: %w", err)
+		}
+		projectUsage(&batch, details.Usage)
+	}
 	redactor := newRedactor(e.SecretFields)
 	batch.Trace.Input = redactor.apply(batch.Trace.Input)
 	batch.Trace.Output = redactor.apply(batch.Trace.Output)
@@ -400,22 +407,12 @@ func buildBatch(
 	if name == "" {
 		name = run.ID
 	}
-	inputMessages := make([]map[string]any, 0, len(messages))
-	for _, message := range messages {
-		inputMessages = append(inputMessages, map[string]any{
-			"id":       message.ID,
-			"ordinal":  message.Ordinal,
-			"role":     message.Role,
-			"content":  message.Content,
-			"metadata": decodeJSON(message.Metadata),
-		})
-	}
 	trace := Trace{
 		ID:        traceID,
 		SessionID: sessionID,
 		Name:      name,
 		Status:    string(run.Status),
-		Input:     inputMessages,
+		Input:     runInput(run),
 		Metadata: map[string]any{
 			"agenttrace_project_id":      project.ID,
 			"agenttrace_project_name":    project.Name,
@@ -438,20 +435,36 @@ func buildBatch(
 	observations := make([]Observation, 0, len(spans))
 	for _, span := range spans {
 		observation := Observation{
-			ID:        spanIDs[span.SpanID],
-			TraceID:   traceID,
-			Type:      observationType(span.Kind),
-			Name:      span.Name,
-			Status:    span.Status,
-			Input:     decodeJSON(span.Input),
-			Output:    decodeJSON(span.Output),
-			StartTime: span.StartedAt,
-			EndTime:   span.EndedAt,
+			ID:         spanIDs[span.SpanID],
+			TraceID:    traceID,
+			Type:       observationType(span.Kind),
+			Name:       span.Name,
+			Status:     span.Status,
+			Input:      decodeJSON(span.Input),
+			Output:     decodeJSON(span.Output),
+			StartTime:  span.StartedAt,
+			OccurredAt: span.StartedAt,
+			EndTime:    span.EndedAt,
 			Metadata: map[string]any{
 				"agenttrace_span_id":         span.ID,
 				"agenttrace_logical_span_id": span.SpanID,
 				"agenttrace_kind":            string(span.Kind),
 			},
+		}
+		if span.Kind == domain.SpanModel {
+			var evidence struct {
+				Text      *string    `json:"text"`
+				StartedAt *time.Time `json:"started_at"`
+				EndedAt   *time.Time `json:"ended_at"`
+				Model     string     `json:"model"`
+			}
+			if json.Unmarshal(span.Output, &evidence) == nil && evidence.Text != nil {
+				observation.Model = evidence.Model
+				observation.EndTime = evidence.EndedAt
+				if evidence.StartedAt == nil || evidence.StartedAt.IsZero() {
+					observation.StartTime = time.Time{}
+				}
+			}
 		}
 		if span.ParentSpanID != "" {
 			observation.ParentObservationID = spanIDs[span.ParentSpanID]

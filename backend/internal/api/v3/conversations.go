@@ -17,6 +17,10 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !s.requireRepository(w) {
 		return
 	}
+	if identity, ok := BridgeIdentityFromContext(r.Context()); ok && identity.ProjectID != r.PathValue("id") {
+		writeBridgeForbidden(w)
+		return
+	}
 	conversations, err := s.repository.ListConversations(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeRepositoryError(w, err)
@@ -32,6 +36,11 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 	if !s.requireRepository(w) {
 		return
 	}
+	identity, trusted := BridgeIdentityFromContext(r.Context())
+	if trusted && (identity.ProjectID != r.PathValue("id") || identity.Role == "viewer") {
+		writeBridgeForbidden(w)
+		return
+	}
 	var input createConversationRequest
 	if !decodeRequest(w, r, &input) {
 		return
@@ -40,6 +49,7 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		ProjectID: r.PathValue("id"),
 		Title:     input.Title,
 		Metadata:  input.Metadata,
+		CreatedBy: identity.ActorID,
 	})
 	if err != nil {
 		writeRepositoryError(w, err)
@@ -50,6 +60,9 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRepository(w) {
+		return
+	}
+	if !s.requireConversationOwner(w, r, r.PathValue("id")) {
 		return
 	}
 	conversation, messages, runs, err := s.repository.GetConversation(r.Context(), r.PathValue("id"))
@@ -75,9 +88,81 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 	if !s.requireRepository(w) {
 		return
 	}
+	if !s.requireConversationOwner(w, r, r.PathValue("id")) {
+		return
+	}
+	if identity, trusted := BridgeIdentityFromContext(r.Context()); trusted {
+		if identity.Role == "viewer" {
+			writeBridgeForbidden(w)
+			return
+		}
+		repository, ok := s.repository.(ConversationManagementRepository)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "management_unavailable", "conversation management is unavailable")
+			return
+		}
+		if err := repository.DeleteConversationAs(r.Context(), r.PathValue("id"), identity.ActorID); err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"conversation_id": r.PathValue("id"), "state": "deleting"})
+		return
+	}
 	if err := s.repository.DeleteConversation(r.Context(), r.PathValue("id")); err != nil {
 		writeRepositoryError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireConversationOwner(w http.ResponseWriter, r *http.Request, id string) bool {
+	identity, trusted := BridgeIdentityFromContext(r.Context())
+	if !trusted {
+		return true // The fixed bridge already checks its configured ownership.
+	}
+	if !s.requireRepository(w) {
+		return false
+	}
+	conversation, _, _, err := s.repository.GetConversation(r.Context(), id)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return false
+	}
+	if conversation.ID != id || conversation.ProjectID != identity.ProjectID {
+		writeBridgeForbidden(w)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Request) {
+	identity, trusted := BridgeIdentityFromContext(r.Context())
+	if !trusted || identity.Role == "viewer" {
+		writeBridgeForbidden(w)
+		return
+	}
+	if !s.requireConversationOwner(w, r, r.PathValue("id")) {
+		return
+	}
+	repository, ok := s.repository.(ConversationManagementRepository)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "management_unavailable", "conversation management is unavailable")
+		return
+	}
+	var input struct {
+		State string `json:"state"`
+	}
+	if !decodeRequest(w, r, &input) {
+		return
+	}
+	if input.State != "archived" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "only archived is supported")
+		return
+	}
+	conversation, err := repository.ArchiveConversation(r.Context(), r.PathValue("id"), identity.ActorID)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation)
 }

@@ -20,6 +20,79 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
 
+func TestExporterProjectFilterAcknowledgesForeignRunWithoutIngestion(t *testing.T) {
+	repository := canonicalRepository()
+	before := repository.run
+	client := &recordingClient{}
+	exporter := newTestExporter(repository, client)
+	exporter.ExportProjectID = "other-project"
+	message := completionMessage(t, "evt-foreign-project")
+	if err := exporter.Handle(context.Background(), message); err != nil {
+		t.Fatalf("filtered completion was not acknowledged: %v", err)
+	}
+	if len(client.batches) != 0 || repository.loads != 1 {
+		t.Fatalf("foreign completion ingested=%d canonical loads=%d, want 0 and 1", len(client.batches), repository.loads)
+	}
+	if !exporter.Inbox.(*memoryInbox).seen["evt-foreign-project"] {
+		t.Fatal("filtered completion did not commit inbox acknowledgement")
+	}
+	retries := exporter.RetryStore.(*memoryRetryStore)
+	if len(retries.attempts) != 0 || retries.handoffCount != 0 {
+		t.Fatal("filtered completion created retries or DLQ")
+	}
+	if !reflect.DeepEqual(repository.run, before) {
+		t.Fatal("project filter changed canonical Run")
+	}
+	if err := exporter.Handle(context.Background(), message); err != nil || repository.loads != 1 {
+		t.Fatal("filtered completion replay was not deduplicated")
+	}
+}
+
+func TestExporterProjectFilterKeepsMatchingAndLegacyCompletion(t *testing.T) {
+	for _, project := range []string{"", "project-1"} {
+		t.Run(project, func(t *testing.T) {
+			client := &recordingClient{}
+			exporter := newTestExporter(canonicalRepository(), client)
+			exporter.ExportProjectID = project
+			if err := exporter.Handle(context.Background(), completionMessage(t, "evt-matching-project")); err != nil {
+				t.Fatal(err)
+			}
+			if len(client.batches) != 1 {
+				t.Fatalf("matching/legacy ingestion = %d, want 1", len(client.batches))
+			}
+		})
+	}
+}
+
+func TestExporterLegacyMissingClientDoesNotReadCanonicalRun(t *testing.T) {
+	repository := canonicalRepository()
+	exporter := newTestExporter(repository, nil)
+	if err := exporter.Handle(context.Background(), completionMessage(t, "evt-missing-client")); err == nil {
+		t.Fatal("missing client accepted")
+	}
+	if repository.loads != 0 {
+		t.Fatalf("legacy missing-client path loaded canonical data %d times, want 0", repository.loads)
+	}
+}
+
+func TestExporterProjectFilterPrecedesCompletionAndClientValidation(t *testing.T) {
+	repository := canonicalRepository()
+	repository.run.Status = domain.RunRunning
+	repository.run.FinishedAt = nil
+	before := repository.run
+	exporter := newTestExporter(repository, nil)
+	exporter.ExportProjectID = "other-project"
+	if err := exporter.Handle(context.Background(), completionMessage(t, "evt-foreign-incomplete")); err != nil {
+		t.Fatalf("foreign completion retried before project filtering: %v", err)
+	}
+	if repository.loads != 1 || !reflect.DeepEqual(repository.run, before) {
+		t.Fatal("foreign filter read downstream data or changed canonical facts")
+	}
+	if !exporter.Inbox.(*memoryInbox).seen["evt-foreign-incomplete"] {
+		t.Fatal("foreign incomplete completion not acknowledged")
+	}
+}
+
 func TestExporterRejectsWrongTopicAndSchema(t *testing.T) {
 	repository := canonicalRepository()
 	exporter := newTestExporter(repository, &recordingClient{})

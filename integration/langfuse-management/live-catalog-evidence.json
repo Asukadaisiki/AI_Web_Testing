@@ -1,0 +1,65 @@
+{
+  "checked_at": "2026-10-28T13:09:45.654Z",
+  "passed": true,
+  "results": [
+    {
+      "check": "listRuntimes",
+      "passed": true,
+      "count": 3
+    },
+    {
+      "check": "listSkills",
+      "passed": true,
+      "count": 2
+    },
+    {
+      "check": "listMcpDefinitions",
+      "passed": true,
+      "count": 1
+    },
+    {
+      "check": "listMcpBindings",
+      "passed": true,
+      "count": 1
+    },
+    {
+      "check": "listHarnesses",
+      "passed": true,
+      "count": 2
+    },
+    {
+      "check": "services",
+      "passed": true
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/binding",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/runtimes",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/skills",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/mcp-definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/mcp-bindings",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/harnesses",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/services",
+      "status": 200
+    }
+  ]
+}

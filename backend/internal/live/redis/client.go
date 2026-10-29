@@ -118,54 +118,6 @@ func (c *Client) readOnce(
 	return events, nil
 }
 
-// SetLease writes run:{id}:lease with its required 30-second default lifetime.
-func (c *Client) SetLease(ctx context.Context, runID, owner string, ttl time.Duration) error {
-	if c == nil || c.client == nil {
-		return errors.New("redis live store is not configured")
-	}
-	if ttl <= 0 {
-		ttl = live.LeaseTTL
-	}
-	if err := c.client.Set(ctx, leaseKey(runID), owner, ttl).Err(); err != nil {
-		return fmt.Errorf("set live lease: %w", err)
-	}
-	return nil
-}
-
-// RequestCancel writes run:{id}:cancel with its required 24-hour default lifetime.
-func (c *Client) RequestCancel(ctx context.Context, runID string, ttl time.Duration) error {
-	if c == nil || c.client == nil {
-		return errors.New("redis live store is not configured")
-	}
-	if ttl <= 0 {
-		ttl = live.CancelTTL
-	}
-	if err := c.client.Set(ctx, cancelKey(runID), "1", ttl).Err(); err != nil {
-		return fmt.Errorf("request live cancellation: %w", err)
-	}
-	return nil
-}
-
-// IsCancelRequested returns true while run:{id}:cancel exists.
-func (c *Client) IsCancelRequested(ctx context.Context, runID string) (bool, error) {
-	if c == nil || c.client == nil {
-		return false, errors.New("redis live store is not configured")
-	}
-	count, err := c.client.Exists(ctx, cancelKey(runID)).Result()
-	if err != nil {
-		return false, fmt.Errorf("read live cancellation: %w", err)
-	}
-	return count > 0, nil
-}
-
 func liveKey(runID string) string {
 	return "run:" + runID + ":live"
-}
-
-func leaseKey(runID string) string {
-	return "run:" + runID + ":lease"
-}
-
-func cancelKey(runID string) string {
-	return "run:" + runID + ":cancel"
 }

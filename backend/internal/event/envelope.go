@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 )
 
 const supportedSchemaMajor = 1
@@ -97,4 +98,9 @@ type RunCommand struct {
 	CheckpointVersion int64            `json:"checkpoint_version"`
 	WorkerURL         string           `json:"worker_url,omitempty"`
 	ArtifactScope     string           `json:"artifact_scope,omitempty"`
+	Execution         *execution.Spec  `json:"execution,omitempty"`
+	ProjectID         string           `json:"project_id,omitempty"`
+	EnvironmentID     string           `json:"environment_id,omitempty"`
+	ProfileGeneration int64            `json:"profile_generation,omitempty"`
+	FencingToken      int64            `json:"fencing_token,omitempty"`
 }

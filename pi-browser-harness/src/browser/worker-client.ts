@@ -15,6 +15,13 @@ const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export interface WorkerClientOptions {
   timeoutMs?: number;
   maxResponseBytes?: number;
+  environmentLease?: {
+    project_id: string;
+    environment_id: string;
+    profile_generation: number;
+    fencing_token: number;
+  };
+  providerToken?: string;
 }
 
 export class WorkerTransportError extends Error {
@@ -37,6 +44,9 @@ export class WorkerClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
+  private readonly environmentLease: WorkerClientOptions["environmentLease"];
+  private readonly headers: Record<string, string>;
+  private browserSessionId: string | undefined;
 
   constructor(baseUrl: string, options: WorkerClientOptions = {}) {
     const parsed = new URL(baseUrl);
@@ -47,6 +57,21 @@ export class WorkerClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+    this.environmentLease = options.environmentLease ? { ...options.environmentLease } : undefined;
+    this.headers = {};
+    if (options.providerToken) this.headers.authorization = `Bearer ${options.providerToken}`;
+    if (this.environmentLease) {
+      const lease = this.environmentLease;
+      if (!lease.project_id?.trim() || !lease.environment_id?.trim() ||
+        !Number.isSafeInteger(lease.profile_generation) || lease.profile_generation < 1 ||
+        !Number.isSafeInteger(lease.fencing_token) || lease.fencing_token < 1 || !options.providerToken?.trim()) {
+        throw new TypeError("managed browser requires complete lease metadata and host provider token");
+      }
+      this.headers["x-project-id"] = lease.project_id;
+      this.headers["x-environment-id"] = lease.environment_id;
+      this.headers["x-profile-generation"] = String(lease.profile_generation);
+      this.headers["x-fencing-token"] = String(lease.fencing_token);
+    }
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new RangeError("timeoutMs must be a positive integer");
     }
@@ -65,7 +90,7 @@ export class WorkerClient {
     const payload = await this.request(
       "POST",
       "/sessions",
-      { session_id: artifactScope },
+      { session_id: artifactScope, ...this.environmentLease },
       signal,
     );
     if (
@@ -75,6 +100,7 @@ export class WorkerClient {
     ) {
       throw malformedResponse(200, "session response requires a non-empty session_id");
     }
+    this.browserSessionId = payload.session_id;
     return payload.session_id;
   }
 
@@ -111,10 +137,15 @@ export class WorkerClient {
     artifact: Case,
     signal?: AbortSignal,
   ): Promise<ExecutionResult> {
+    if (this.environmentLease && !this.browserSessionId) {
+      throw new TypeError("managed dryrun requires a held browser session");
+    }
     const payload = await this.request(
       "POST",
       "/execute",
-      { session_id: artifactScope, case: artifact },
+      { session_id: artifactScope, case: artifact, ...(this.environmentLease ? {
+        ...this.environmentLease, browser_session_id: this.browserSessionId,
+      } : {}) },
       signal,
     );
     return decodeSuccess(payload, parseExecutionResult);
@@ -133,6 +164,7 @@ export class WorkerClient {
     if (!isRecord(payload) || payload.closed !== true) {
       throw malformedResponse(200, "close response requires closed=true");
     }
+    if (this.browserSessionId === browserSessionId) this.browserSessionId = undefined;
   }
 
   private async request(
@@ -159,13 +191,14 @@ export class WorkerClient {
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method,
+        headers: { ...this.headers, ...(body === undefined ? {} : { "content-type": "application/json" }) },
         ...(body === undefined
           ? {}
           : {
-              headers: { "content-type": "application/json" },
               body: JSON.stringify(body),
             }),
         signal: controller.signal,
+        redirect: "error",
       });
 
       const payload = await this.readJson(response);

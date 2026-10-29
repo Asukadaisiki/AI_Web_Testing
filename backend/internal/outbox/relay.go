@@ -29,6 +29,7 @@ type Config struct {
 	BatchSize      int
 	LeaseDuration  time.Duration
 	InitialBackoff time.Duration
+	Observe        func(context.Context, error)
 }
 
 // Relay claims outbox records in short transactions and publishes them outside PostgreSQL.
@@ -53,7 +54,10 @@ func NewRelay(pool *pgxpool.Pool, bus eventbus.EventBus, config Config) *Relay {
 }
 
 // RelayOnce claims one bounded batch and returns the number acknowledged by the broker.
-func (r *Relay) RelayOnce(ctx context.Context) (int, error) {
+func (r *Relay) RelayOnce(ctx context.Context) (publishedResult int, resultErr error) {
+	if r != nil && r.config.Observe != nil {
+		defer func() { r.config.Observe(ctx, resultErr) }()
+	}
 	if r == nil || r.pool == nil || r.bus == nil {
 		return 0, errors.New("outbox relay is not configured")
 	}

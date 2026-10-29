@@ -51,7 +51,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if event.Type != "" {
 				_, _ = fmt.Fprintf(&encoded, "event: %s\n", event.Type)
 			}
-			_, _ = fmt.Fprintf(&encoded, "data: %s\n\n", event.Data)
+			_, _ = fmt.Fprintf(&encoded, "data: %s\n\n", redactTraceJSON(event.Data))
 			if !s.writeSSE(w, flusher, "%s", encoded.String()) {
 				return
 			}

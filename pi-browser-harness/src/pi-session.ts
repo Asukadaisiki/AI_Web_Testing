@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { Writable } from "node:stream";
-
 import {
   DefaultResourceLoader,
   SessionManager,
@@ -10,466 +9,348 @@ import {
   type CreateAgentSessionOptions,
   type CreateAgentSessionResult,
   type InlineExtension,
+  type McpTransportFactory,
   type ModelRuntime,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Message,
-  type ToolCall,
-} from "@earendil-works/pi-ai";
+import { StdioTransport, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { HarnessCleanupContext, HarnessDefinition, ObservedEvent } from "./harness-definition.js";
+import { SessionCleanupError, type ExecutionSession } from "./server.js";
+import { createHarnessMcpToolsExtension, createHarnessExtension } from "./extension.js";
+import { createStandardEventMapper, mapToolCompleted } from "./pi-events.js";
+import { resolveModel } from "./model-provider.js";
+import { HarnessEventWriter, type HarnessEventPayloads, type RunRequest } from "./run-protocol.js";
 
-import {
-  createBrowserHarnessExtension,
-  createSequentialBrowserMcpToolsExtension,
-} from "./extension.js";
-import {
-  createTraceMapperState,
-  mapPiEvent,
-  type TraceMapperState,
-} from "./trace-events.js";
-import {
-  HarnessEventWriter,
-  deriveTerminalVerdict,
-  type RunRequest,
-} from "./run-protocol.js";
-
-const SYSTEM_PROMPT_PATH = fileURLToPath(
-  new URL("../resources/system-prompt.md", import.meta.url),
-);
-const SKILLS_DIR = fileURLToPath(
-  new URL("../resources/skills", import.meta.url),
-);
-
-/** Dependencies injected into {@link createBrowserSession}. */
-export interface BrowserSessionDeps {
-  /** Pi session factory. Injected so tests can substitute a fake session. */
-  createAgentSession: (
-    options: CreateAgentSessionOptions,
-  ) => Promise<CreateAgentSessionResult>;
-  /** Model runtime with providers registered by the harness. */
+export interface PiSessionDeps {
+  createAgentSession(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult>;
   modelRuntime: ModelRuntime;
-  /** Writes harness JSONL events to stdout. */
   eventWriter: HarnessEventWriter;
-  /** Working directory for the Pi session. Defaults to process.cwd(). */
   cwd?: string;
-  /** Sink for diagnostic logs. Defaults to process.stderr. */
   stderr?: Pick<Writable, "write">;
-  /** Path to the compiled MCP child. Defaults to dist/mcp/server.js. */
-  mcpChildPath?: string;
-  /** Override the resource loader (tests). */
   resourceLoader?: ResourceLoader;
-  /** Override extension factories (tests). */
   extensionFactories?: InlineExtension[];
+  /** Supported Pi MCP transport factory; transports must report settlement via onClose. */
+  createTransport?: McpTransportFactory;
+  /** Maximum time to await a transport close acknowledgement. Default: 5000ms. */
+  transportCloseTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
-/** A running Pi browser authoring session. */
-export interface BrowserSession {
-  /** Sends the forced browser-case-authoring skill prompt with the run goal. */
-  prompt(goal: string): Promise<void>;
-  /** Aborts the current agent run and waits for idle. */
-  abort(): Promise<void>;
-  /** Disconnects listeners and releases the session. */
-  dispose(): void;
-  /** Names of the tools currently declared to the model. */
+export interface BrowserSessionDeps extends PiSessionDeps {
+  mcpChildPath?: string;
+}
+
+export interface PiSession extends ExecutionSession {
   getActiveToolNames(): string[];
-  /** Terminal verdict derived from settlement and browser case evidence. */
   getVerdict(): "succeeded" | "failed";
+  /** Legacy synchronous SDK disposal; owners must await close() for resource release. */
+  dispose(): void;
 }
 
-/**
- * Creates a Pi agent session configured for browser case authoring: forced
- * system prompt, forced browser skill, in-memory session/settings, only the
- * browser MCP tool namespace active, and the browser-harness extension that
- * owns the MCP child.
- */
+export type BrowserSession = PiSession;
+
 export async function createBrowserSession(
-  request: RunRequest,
-  deps: BrowserSessionDeps,
+  request: RunRequest, deps: BrowserSessionDeps,
 ): Promise<BrowserSession> {
+  const { createBrowserHarnessDefinition } = await import("./browser-harness.js");
+  return createPiSession(request, deps, createBrowserHarnessDefinition(deps.mcpChildPath));
+}
+
+/** Adapts a selected harness to Pi. All behavior specific to tools lives in its definition. */
+export async function createPiSession(
+  request: RunRequest, deps: PiSessionDeps, definition: HarnessDefinition,
+): Promise<PiSession> {
+  deps.signal?.throwIfAborted();
   const cwd = deps.cwd ?? process.cwd();
-  const stderr = deps.stderr ?? process.stderr;
-
-  const model = resolveModel(deps.modelRuntime, request);
-
-  const resourceLoader =
-    deps.resourceLoader ??
-    buildResourceLoader(
-      cwd,
-      deps.extensionFactories,
-      request,
-      deps.mcpChildPath,
-    );
-  await resourceLoader.reload();
-
+  const model = resolveModel(deps.modelRuntime, request, definition);
   const settingsManager = SettingsManager.inMemory({
-    retry: {
-      enabled: true,
-      maxRetries: 2,
-      baseDelayMs: 100,
-      maxAgentDelayMs: 1000,
-    },
+    retry: { enabled: true, maxRetries: 2, baseDelayMs: 100, maxAgentDelayMs: 1000 },
   });
-
-  const { session } = await deps.createAgentSession({
-    cwd,
-    model,
-    thinkingLevel: request.model.reasoning_effort as ThinkingLevel,
-    modelRuntime: deps.modelRuntime,
-    resourceLoader,
-    tools: ["mcp__browser_harness__*"],
-    sessionManager: SessionManager.inMemory(cwd),
-    settingsManager,
-  });
-
-  await session.bindExtensions({});
-
-  const state: TraceMapperState = createTraceMapperState();
-  let assistantSettled = false;
-
-  const unsubscribe = session.subscribe((event) => {
-    if (event.type === "agent_settled") {
-      assistantSettled = true;
-    }
-    const mapped = mapPiEvent(event, state);
-    for (const item of mapped) {
-      deps.eventWriter.write(item.type, item.payload as never);
-    }
-  });
-
-  const self: BrowserSession = {
-    async prompt(goal: string): Promise<void> {
-      await session.prompt(`/skill:browser-case-authoring ${goal}`);
-    },
-    async abort(): Promise<void> {
-      await session.abort();
-    },
-    dispose(): void {
-      unsubscribe();
-      session.dispose();
-    },
-    getActiveToolNames(): string[] {
-      return session.getActiveToolNames();
-    },
-    getVerdict(): "succeeded" | "failed" {
-      return deriveTerminalVerdict({
-        assistant_settled: assistantSettled,
-        browser_case_verdicts: state.browser_case_verdicts,
-      });
-    },
+  const servers = typeof definition.mcpServers === "function"
+    ? definition.mcpServers(request) : definition.mcpServers;
+  const evidenceGuard = servers.some((server) => server.name === "browser-harness")
+    ? new (await import("./browser/evidence-guard.js")).BrowserEvidenceGuard() : undefined;
+  const redact = <T>(value: T): T => evidenceGuard?.redact(value) ?? value;
+  const eventWriter = evidenceGuard?.publicWriter(deps.eventWriter) ?? deps.eventWriter;
+  const transportCloseTimeoutMs = deps.transportCloseTimeoutMs ?? 5_000;
+  if (!Number.isFinite(transportCloseTimeoutMs) || transportCloseTimeoutMs <= 0) {
+    throw new Error("transportCloseTimeoutMs must be positive and finite");
+  }
+  const transports: { close(): Promise<void> }[] = [];
+  const expandHome = (path: string) => path === "~" ? homedir()
+    : path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"))
+      ? resolve(homedir(), path.slice(2)) : path;
+  const createTransport: McpTransportFactory = (entry, directory, authProvider) => {
+    const config = entry.config;
+    // Use Pi's public native transports, leaving discovery and tool execution to Pi.
+    const transport = deps.createTransport?.(entry, directory, authProvider) ??
+      ("url" in config ? new StreamableHttpTransport({
+        url: config.url, ...(config.headers ? { headers: { ...config.headers } } : {}),
+        ...(authProvider ? { authProvider } : {}),
+      }) : new StdioTransport({
+        command: expandHome(config.command),
+        ...(config.args ? { args: config.args.map(expandHome) } : {}),
+        cwd: resolve(directory, expandHome(config.cwd ?? ".")),
+        // Capability resolution already produced literal values, not Pi config syntax.
+        ...(config.env ? { env: { ...config.env } } : {}), stderr: "pipe",
+      }));
+    const nativeClose = transport.close.bind(transport);
+    const acknowledged = new Promise<void>((resolve) => { transport.onClose(resolve); });
+    let transportClosing: Promise<void> | undefined;
+    // The observer predates connect and outlives the client's own listener disposal.
+    transport.close = () => {
+      transportClosing ??= (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            Promise.all([Promise.resolve().then(nativeClose), acknowledged]),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => reject(new SessionCleanupError(
+                `MCP transport close acknowledgement is missing: ${entry.name}`,
+              )), transportCloseTimeoutMs);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      })();
+      // Pi suppresses client-close rejections; retain them for the host's close below.
+      void transportClosing.catch(() => {});
+      return transportClosing;
+    };
+    transports.push(transport);
+    return transport;
   };
-
-  return self;
-}
-
-/**
- * Resolves the model for the run. For the `scripted` provider a deterministic
- * provider is registered so tests never hit the network. For any other
- * provider an OpenAI-compatible provider is registered from server-owned
- * environment values.
- */
-function resolveModel(
-  runtime: ModelRuntime,
-  request: RunRequest,
-) {
-  const provider = request.model.provider;
-  if (provider === "scripted") {
-    registerScriptedProvider(runtime, request.model.name);
-  } else {
-    registerOpenAiCompatibleProvider(runtime, provider, request.model.name);
-  }
-  const model = runtime.getModel(provider, request.model.name);
-  if (model === undefined) {
-    throw new Error(
-      `model ${provider}/${request.model.name} is not available`,
-    );
-  }
-  return model;
-}
-
-function registerOpenAiCompatibleProvider(
-  runtime: ModelRuntime,
-  provider: string,
-  modelName: string,
-): void {
-  const baseUrl = requiredEnv("AGENTTRACE_MODEL_BASE_URL");
-  const apiKey = requiredEnv("AGENTTRACE_MODEL_API_KEY");
-  const api = resolveProviderApi();
-  runtime.registerProvider(provider, {
-    baseUrl,
-    apiKey,
-    api,
-    models: [registeredModel(modelName, true)],
-  });
-}
-
-/**
- * Resolves the OpenAI-compatible provider API surface from
- * `AGENTTRACE_PI_PROVIDER_API`. Defaults to `"openai-completions"`; supported
- * values include `"openai-completions"` and `"openai-responses"`.
- */
-function resolveProviderApi(): "openai-completions" | "openai-responses" {
-  const value = process.env["AGENTTRACE_PI_PROVIDER_API"];
-  if (value === undefined || value.trim() === "") {
-    return "openai-completions";
-  }
-  const trimmed = value.trim();
-  if (trimmed === "openai-responses") {
-    return "openai-responses";
-  }
-  if (trimmed === "openai-completions") {
-    return "openai-completions";
-  }
-  throw new Error(
-    `AGENTTRACE_PI_PROVIDER_API must be "openai-completions" or "openai-responses", got "${trimmed}"`,
-  );
-}
-
-function registerScriptedProvider(runtime: ModelRuntime, modelName: string): void {
-  runtime.registerProvider("scripted", {
-    api: "pi-messages",
-    baseUrl: "http://scripted.local",
-    apiKey: "scripted",
-    models: [registeredModel(modelName, false)],
-    streamSimple: (model, context) => {
-      const stream = createAssistantMessageEventStream();
-      const goal = scriptedUserGoal(context.messages);
-      const priorToolResults = context.messages.filter(
-        (message) => message.role === "toolResult",
-      ).length;
-      const message = makeScriptedAssistantMessage(
-        model.id,
-        scriptedResponse(goal, priorToolResults),
-        priorToolResults + 1,
-      );
-      stream.end(message);
-      return stream;
-    },
-  });
-}
-
-function registeredModel(modelName: string, reasoning: boolean) {
-  return {
-    id: modelName,
-    name: modelName,
-    reasoning,
-    input: ["text"] as ("text")[],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 4096,
-  };
-}
-
-interface ScriptedTool {
-  name: string;
-  arguments: ToolCall["arguments"];
-}
-
-type ScriptedResponse =
-  | { tool: ScriptedTool }
-  | { text: string };
-
-function scriptedResponse(
-  goal: string,
-  priorToolResults: number,
-): ScriptedResponse {
-  if (goal.includes("DoesNotExist")) {
-    if (priorToolResults === 0) {
-      return {
-        tool: {
-          name: "mcp__browser_harness__open_page",
-          arguments: {
-            url: "http://fixture-site/index.html",
-            intent: "Open the local catalog",
-          },
-        },
-      };
+  const closeTransports = async () => {
+    const outcomes = await Promise.allSettled(transports.map((transport) => transport.close()));
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+    if (failures.length) {
+      throw new SessionCleanupError(failures.map((failure) =>
+        failure.reason instanceof Error ? failure.reason.message : String(failure.reason)).join("; "));
     }
-    if (priorToolResults === 1) {
-      return {
-        tool: {
-          name: "mcp__browser_harness__assert_text",
-          arguments: {
-            text: "DoesNotExist",
-            intent: "Verify the missing product is visible",
-          },
-        },
-      };
-    }
-    return { text: "Final: DoesNotExist was not found." };
-  }
-
-  const canonicalTools: ScriptedTool[] = [
-    {
-      name: "mcp__browser_harness__open_page",
-      arguments: {
-        url: "http://fixture-site/index.html",
-        intent: "Open the local catalog",
-      },
-    },
-    {
-      name: "mcp__browser_harness__input",
-      arguments: {
-        target: { object: { text: "Search items" } },
-        value: "alpha",
-        submit: true,
-        intent: "Filter the catalog to Alpha",
-        expect_value: "alpha",
-        expect_gone: "Beta",
-      },
-    },
-    {
-      name: "mcp__browser_harness__click",
-      arguments: {
-        target: { object: { text: "Alpha" } },
-        intent: "Open the Alpha item",
-        expect_url: "detail.html",
-        expect_gone: "Loading details",
-      },
-    },
-    {
-      name: "mcp__browser_harness__input",
-      arguments: {
-        target: { object: { text: "Quantity" } },
-        value: "2",
-        intent: "Set quantity to two",
-        expect_value: "2",
-      },
-    },
-    {
-      name: "mcp__browser_harness__click",
-      arguments: {
-        target: { object: { text: "Add to cart" } },
-        intent: "Add Alpha to the cart",
-        expect_text: "Added!",
-      },
-    },
-    {
-      name: "mcp__browser_harness__click",
-      arguments: {
-        target: { object: { text: "View Cart" } },
-        intent: "Open the cart",
-        expect_url: "cart.html",
-      },
-    },
-    {
-      name: "mcp__browser_harness__assert_text",
-      arguments: {
-        text: "Alpha x 2",
-        intent: "Verify the final cart quantity",
-      },
-    },
-    {
-      name: "mcp__browser_harness__finish_case",
-      arguments: { name: "canonical" },
-    },
-  ];
-
-  const tool = canonicalTools[priorToolResults];
-  return tool === undefined
-    ? { text: "Final: Alpha x 2 is in the cart." }
-    : { tool };
-}
-
-function scriptedUserGoal(messages: Message[]): string {
-  const userMessage = messages.find((message) => message.role === "user");
-  if (userMessage === undefined) {
-    return "";
-  }
-  if (typeof userMessage.content === "string") {
-    return userMessage.content;
-  }
-  return userMessage.content
-    .filter((content) => content.type === "text")
-    .map((content) => content.text)
-    .join("\n");
-}
-
-function makeScriptedAssistantMessage(
-  model: string,
-  response: ScriptedResponse,
-  step: number,
-): AssistantMessage {
-  const ts = Date.now();
-  return {
-    role: "assistant" as const,
-    content: "tool" in response
-      ? [
-          {
-            type: "toolCall" as const,
-            id: `scripted-tool-${step}`,
-            name: response.tool.name,
-            arguments: response.tool.arguments,
-          },
-        ]
-      : [{ type: "text" as const, text: response.text }],
-    api: "pi-messages",
-    provider: "scripted",
-    model,
-    usage: {
-      input: 10,
-      output: 5,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 15,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "tool" in response ? "toolUse" : "stop",
-    timestamp: ts,
   };
-}
-
-/**
- * Builds the resource loader with the checked-in system prompt, the single
- * browser-case-authoring skill, and the MCP + browser-harness extensions.
- */
-function buildResourceLoader(
-  cwd: string,
-  extensionFactoriesOverride: InlineExtension[] | undefined,
-  request: RunRequest,
-  mcpChildPath: string | undefined,
-): ResourceLoader {
-  const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, "utf8");
-  const { skills } = loadSkillsFromDir({
-    dir: SKILLS_DIR,
-    source: "browser-harness",
-  });
-
-  const extensionFactories: InlineExtension[] =
-    extensionFactoriesOverride ?? [
-      createSequentialBrowserMcpToolsExtension(),
-      createBrowserHarnessExtension({
-        mcpChildPath: mcpChildPath ?? defaultMcpChildPath(),
-        workerUrl: request.worker_url,
-        artifactScope: request.artifact_scope,
-        goal: request.goal,
-      }),
-    ];
-
-  return new DefaultResourceLoader({
-    cwd,
-    agentDir: cwd,
-    extensionFactories,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    systemPromptOverride: () => systemPrompt,
+  const resourceLoader = deps.resourceLoader ?? new DefaultResourceLoader({
+    cwd, agentDir: cwd, settingsManager,
+    noExtensions: true,
+    disabledBuiltinExtensions: ["mcp"],
+    extensionFactories: deps.extensionFactories ?? [
+      ...(servers.length ? [createHarnessMcpToolsExtension(servers, { createTransport })] : []),
+      createHarnessExtension(servers, definition.toolAllowlist),
+    ],
+    noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+    systemPromptOverride: () => definition.systemPrompt,
     appendSystemPromptOverride: () => [],
-    skillsOverride: () => ({ skills, diagnostics: [] }),
+    skillsOverride: () => ({
+      skills: definition.skillPaths.flatMap((dir) => loadSkillsFromDir({ dir, source: "harness" }).skills),
+      diagnostics: [],
+    }),
   });
-}
+  await resourceLoader.reload();
+  deps.signal?.throwIfAborted();
+  const { session } = await deps.createAgentSession({
+    cwd, model, thinkingLevel: request.model.reasoning_effort as ThinkingLevel,
+    modelRuntime: deps.modelRuntime, resourceLoader,
+    tools: [...definition.toolAllowlist],
+    sessionManager: SessionManager.inMemory(cwd, { id: request.attempt_id }),
+    settingsManager,
+  }).catch(async (error: unknown) => {
+    try { await closeTransports(); } catch (cleanupError) {
+      throw new SessionCleanupError(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        { cause: error },
+      );
+    }
+    throw error;
+  });
+  let modelInput: HarnessEventPayloads["pi.message.completed"]["input"];
+  const originalStreamSimple = deps.modelRuntime.streamSimple;
+  deps.modelRuntime.streamSimple = function(model, context, options) {
+    // Capture the transformed model context only, never request options/auth headers.
+    const privateContext = evidenceGuard?.modelContext(context) ?? context;
+    modelInput = JSON.parse(JSON.stringify(redact(privateContext))) as typeof modelInput;
+    return originalStreamSimple.call(this, model, privateContext, options);
+  };
 
-function defaultMcpChildPath(): string {
-  return fileURLToPath(new URL("./mcp/server.js", import.meta.url));
-}
+  let closing: Promise<void> | undefined;
+  let disposed = false;
+  let unsubscribe = () => {};
+  let aborting: Promise<void> | undefined;
+  let running: Promise<void> | undefined;
+  const abort = (): Promise<void> => {
+    aborting ??= Promise.resolve().then(() => session.abort());
+    return aborting;
+  };
+  const onAbort = () => { void abort().catch(() => {}); };
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    deps.modelRuntime.streamSimple = originalStreamSimple;
+    unsubscribe();
+    evidenceGuard?.discardPending();
+    session.dispose();
+  };
+  const close = (): Promise<void> => {
+    closing ??= (async () => {
+      unsubscribe();
+      deps.signal?.removeEventListener("abort", onAbort);
+      const errors: string[] = [];
+      const offErrors = session.extensionRunner?.onError?.((error) => { errors.push(error.error); });
+      const hostCalls = new Map<string, Promise<unknown>>();
+      const namespace = (name: string) => `mcp__${name.replace(/[^A-Za-z0-9_]/g, "_")}__`;
+      const callMcpTool: HarnessCleanupContext["callMcpTool"] = (name, arguments_) => {
+        const prior = hostCalls.get(name);
+        if (prior) return prior;
+        const calling = (async () => {
+          const tool = session.extensionRunner.getToolDefinition(name);
+          if (!name.startsWith("mcp__") || !tool) {
+            throw new Error(`MCP cleanup tool is unavailable: ${name}`);
+          }
+          const id = `cleanup:${name}`;
+          const result = await tool.execute(
+            id, arguments_, undefined, undefined,
+            session.extensionRunner.createToolContext(id, undefined),
+          );
+          if (result.isError) {
+            throw new Error(result.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text).join("\n") || `MCP cleanup failed: ${name}`);
+          }
+          // Preserve the SDK envelope and injected legacy definitions' result shape.
+          return result.structuredContent;
+        })();
+        hostCalls.set(name, calling);
+        return calling;
+      };
+      const recordError = (error: unknown) => {
+        errors.push(error instanceof Error ? error.message : String(error));
+      };
+      try {
+        try {
+          try { await abort(); } catch (error) { recordError(error); }
+          // Join the exposed prompt too; a rejected model turn is not a cleanup failure.
+          await running?.catch(() => {});
+          if (definition.cleanup || servers.length) {
+            // The supported MCP command awaits pending discovery, even if no model
+            // prompt ran. Hidden lifecycle tools are available through the SDK.
+            try { await session.prompt("/mcp"); } catch (error) { recordError(error); }
+          }
+          if (definition.cleanup) {
+            try { await definition.cleanup({ callMcpTool }); } catch (error) { recordError(error); }
+          }
+          for (const server of servers) {
+            try {
+              const prefix = namespace(server.name);
+              const wasCleaned = (server.hostOnlyTools ?? []).some((tool) =>
+                hostCalls.has(`${prefix}${tool.replace(/[^A-Za-z0-9_]/g, "_")}`));
+              const name = `${prefix}close_session`;
+              const tool = session.extensionRunner?.getToolDefinition?.(name);
+              if (wasCleaned || hostCalls.has(name) || !tool ||
+                (!server.hostOnlyTools?.includes("close_session") &&
+                  server.exposure !== "hidden" && tool.exposure !== "hidden")) continue;
+              const result = await callMcpTool(name, {}) as {
+                structuredContent?: { closed?: unknown }; closed?: unknown;
+              } | undefined;
+              if ((result?.structuredContent?.closed ?? result?.closed) !== true) {
+                throw new Error(`MCP cleanup acknowledgement is missing: ${name}`);
+              }
+            } catch (error) { recordError(error); }
+          }
+        } finally {
+          // SDK dispose() does not emit shutdown. MCP awaits transports and pending connects.
+          try {
+            await session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+          } catch (error) { recordError(error); }
+          try { await closeTransports(); } catch (error) { recordError(error); }
+        }
+        if (errors.length) throw new SessionCleanupError(errors.join("; "));
+      } finally {
+        offErrors?.();
+        dispose();
+      }
+    })();
+    return closing;
+  };
+  deps.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    deps.signal?.throwIfAborted();
+    await session.bindExtensions({});
+    deps.signal?.throwIfAborted();
 
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") {
-    throw new Error(`environment variable ${name} is required`);
+    const map = definition.createEventMapper?.() ?? createStandardEventMapper();
+    const events = new Map<ObservedEvent["type"], ObservedEvent>();
+    let finalAssistant: AssistantMessage | undefined;
+    let text = "";
+    let verdict: "succeeded" | "failed" = "failed";
+    unsubscribe = session.subscribe((event) => {
+      if (eventWriter.hasTerminalEvent) return;
+      try {
+        evidenceGuard?.observe(event);
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          // Retry attempts also emit message_end; only the latest outcome owns settlement.
+          finalAssistant = event.message;
+        }
+        for (const item of map(event)) {
+          // The selected completion policy, not the mapper, owns settlement.
+          if (item.type === "harness.settled") continue;
+          if (item.type === "pi.tool.completed" && event.type === "tool_execution_end" &&
+            item.payload.tool_call_id === event.toolCallId && item.payload.tool_name === event.toolName) {
+            const canonical = mapToolCompleted(event).payload;
+            item.payload = {
+              ...canonical, ...item.payload,
+              ...(canonical.result !== undefined ? { result: canonical.result } : {}),
+            };
+          }
+          if (item.type === "pi.message.completed") {
+            text = item.payload.text;
+            if (modelInput !== undefined) item.payload.input = modelInput;
+          }
+          item.payload = redact(item.payload);
+          if (definition.completionEventTypes?.includes(item.type)) events.set(item.type, item);
+          eventWriter.write(item.type, item.payload);
+        }
+        if (event.type === "agent_settled") {
+          if (event.aborted || finalAssistant?.stopReason === "error" ||
+            finalAssistant?.stopReason === "aborted" || finalAssistant?.errorMessage) {
+            verdict = "failed";
+            eventWriter.write("harness.failed", {
+              error: redact(finalAssistant?.errorMessage ||
+                (event.aborted || finalAssistant?.stopReason === "aborted"
+                  ? "Pi assistant was aborted" : "Pi assistant failed")),
+            });
+            return;
+          }
+          const completion = definition.completionPolicy({
+            assistant_settled: true, aborted: Boolean(event.aborted),
+            assistant_text: text, events: [...events.values()],
+          });
+          verdict = completion.verdict;
+          eventWriter.write("harness.settled", { assistant_text: text, ...completion });
+        }
+      } catch (error) {
+        verdict = "failed";
+        eventWriter.write("harness.failed", {
+          error: redact(error instanceof Error ? error.message : String(error)),
+        });
+      }
+    });
+    return {
+      prompt: (goal) => running = session.prompt(definition.formatPrompt?.(goal) ?? goal),
+      abort,
+      close, dispose,
+      getActiveToolNames: () => session.getActiveToolNames(),
+      getVerdict: () => verdict,
+    };
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new SessionCleanupError(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  return value;
 }

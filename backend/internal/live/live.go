@@ -12,14 +12,10 @@ const (
 	MaxStreamLength int64 = 2000
 	// StreamTTL limits how long a disposable run stream remains available.
 	StreamTTL = 24 * time.Hour
-	// LeaseTTL is the required ownership lease lifetime.
-	LeaseTTL = 30 * time.Second
-	// CancelTTL limits a disposable cancellation hint.
-	CancelTTL = 24 * time.Hour
 )
 
-// LiveEvent is either a durable event notification identified by Sequence or an
-// ephemeral token delta with Sequence zero.
+// LiveEvent is a disposable wakeup. Sequence is retained for old stream records;
+// readers must fetch authoritative sequences and payloads from PostgreSQL.
 type LiveEvent struct {
 	ID       string          `json:"-"`
 	Sequence int64           `json:"sequence,omitempty"`
@@ -27,11 +23,8 @@ type LiveEvent struct {
 	Data     json.RawMessage `json:"data"`
 }
 
-// LiveStore holds capped, expiring live updates and disposable run coordination hints.
+// LiveStore holds capped, expiring run event wakeups.
 type LiveStore interface {
 	Append(ctx context.Context, runID string, event LiveEvent) error
 	Read(ctx context.Context, runID, afterID string, block time.Duration) ([]LiveEvent, error)
-	SetLease(ctx context.Context, runID, owner string, ttl time.Duration) error
-	RequestCancel(ctx context.Context, runID string, ttl time.Duration) error
-	IsCancelRequested(ctx context.Context, runID string) (bool, error)
 }

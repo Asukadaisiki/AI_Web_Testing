@@ -23,22 +23,80 @@ type rerunRequest struct {
 }
 
 type publicRun struct {
-	ID                string           `json:"id"`
-	ProjectID         string           `json:"project_id"`
-	ConversationID    string           `json:"conversation_id"`
-	SourceMessageID   string           `json:"source_message_id,omitempty"`
-	RetryOfRunID      string           `json:"retry_of_run_id,omitempty"`
-	Status            domain.RunStatus `json:"status"`
-	CheckpointVersion int64            `json:"checkpoint_version"`
-	CancelRequestedAt *time.Time       `json:"cancel_requested_at,omitempty"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
+	ID                string                    `json:"id"`
+	ProjectID         string                    `json:"project_id"`
+	ConversationID    string                    `json:"conversation_id"`
+	SourceMessageID   string                    `json:"source_message_id,omitempty"`
+	RetryOfRunID      string                    `json:"retry_of_run_id,omitempty"`
+	Status            domain.RunStatus          `json:"status"`
+	CheckpointVersion int64                     `json:"checkpoint_version"`
+	CancelRequestedAt *time.Time                `json:"cancel_requested_at,omitempty"`
+	StartedAt         *time.Time                `json:"started_at,omitempty"`
+	FinishedAt        *time.Time                `json:"finished_at,omitempty"`
+	CreatedAt         time.Time                 `json:"created_at"`
+	UpdatedAt         time.Time                 `json:"updated_at"`
+	RuntimeID         string                    `json:"runtime_id,omitempty"`
+	HarnessID         string                    `json:"harness_id,omitempty"`
+	HarnessRevision   int                       `json:"harness_revision,omitempty"`
+	Model             *publicRunModel           `json:"model,omitempty"`
+	EnvironmentID     string                    `json:"environment_id,omitempty"`
+	ProfileGeneration *int64                    `json:"profile_generation,omitempty"`
+	HarnessSnapshot   *publicRunHarnessSnapshot `json:"harness_snapshot,omitempty"`
+}
+
+type publicRunModel struct {
+	Provider        string `json:"provider"`
+	Name            string `json:"name"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+type publicRunSkill struct {
+	Name          string `json:"name"`
+	VersionID     string `json:"version_id,omitempty"`
+	ContentDigest string `json:"content_digest,omitempty"`
+}
+
+type publicRunMCP struct {
+	Capability    string `json:"capability"`
+	VersionID     string `json:"version_id,omitempty"`
+	ContentDigest string `json:"content_digest,omitempty"`
+}
+
+type publicRunHarnessSnapshot struct {
+	HarnessID        string                  `json:"harness_id"`
+	HarnessVersionID string                  `json:"harness_version_id"`
+	Revision         int                     `json:"revision"`
+	Name             string                  `json:"name,omitempty"`
+	ProjectID        string                  `json:"project_id,omitempty"`
+	ContentDigest    string                  `json:"content_digest"`
+	RuntimeIDs       []string                `json:"runtime_ids"`
+	SkillVersionIDs  []string                `json:"skill_version_ids"`
+	MCPBindingIDs    []string                `json:"mcp_binding_ids"`
+	RuntimeID        string                  `json:"runtime_id"`
+	EnvironmentID    string                  `json:"environment_id"`
+	Skills           []publicRunSkill        `json:"skills"`
+	MCP              map[string]publicRunMCP `json:"mcp"`
+}
+
+// Decode only public provenance, not executable content or private configuration.
+type runExecutionProjection struct {
+	RuntimeID string `json:"runtime_id"`
+	Harness   struct {
+		ID            string                  `json:"id"`
+		VersionID     string                  `json:"version_id"`
+		Revision      int                     `json:"revision"`
+		Name          string                  `json:"name"`
+		ProjectID     string                  `json:"project_id"`
+		ContentDigest string                  `json:"content_digest"`
+		RuntimeIDs    []string                `json:"runtime_ids"`
+		MCPBindingIDs []string                `json:"mcp_binding_ids"`
+		Skills        []publicRunSkill        `json:"skills"`
+		MCP           map[string]publicRunMCP `json:"mcp"`
+	} `json:"harness"`
 }
 
 func toPublicRun(run domain.Run) publicRun {
-	return publicRun{
+	result := publicRun{
 		ID:                run.ID,
 		ProjectID:         run.ProjectID,
 		ConversationID:    run.ConversationID,
@@ -52,6 +110,66 @@ func toPublicRun(run domain.Run) publicRun {
 		CreatedAt:         run.CreatedAt,
 		UpdatedAt:         run.UpdatedAt,
 	}
+	var specification struct {
+		Execution *runExecutionProjection `json:"execution"`
+		Command   struct {
+			Execution         *runExecutionProjection `json:"execution"`
+			Model             *publicRunModel         `json:"model"`
+			EnvironmentID     string                  `json:"environment_id"`
+			ProfileGeneration *int64                  `json:"profile_generation"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(run.Specification, &specification); err != nil {
+		return result
+	}
+	command := specification.Command
+	if command.Model != nil && command.Model.Provider != "" && command.Model.Name != "" {
+		result.Model = command.Model
+	}
+	result.EnvironmentID = command.EnvironmentID
+	result.ProfileGeneration = command.ProfileGeneration
+	selected := specification.Execution
+	if selected == nil {
+		selected = command.Execution
+	}
+	if selected == nil {
+		return result
+	}
+	harness := selected.Harness
+	result.RuntimeID = selected.RuntimeID
+	result.HarnessID = harness.ID
+	result.HarnessRevision = harness.Revision
+	snapshot := &publicRunHarnessSnapshot{
+		HarnessID:        harness.ID,
+		HarnessVersionID: harness.VersionID,
+		Revision:         harness.Revision,
+		Name:             harness.Name,
+		ProjectID:        harness.ProjectID,
+		ContentDigest:    harness.ContentDigest,
+		RuntimeIDs:       append([]string{}, harness.RuntimeIDs...),
+		SkillVersionIDs:  []string{},
+		// Older snapshots have no binding IDs; MCP version IDs are not binding IDs.
+		MCPBindingIDs: append([]string{}, harness.MCPBindingIDs...),
+		RuntimeID:     selected.RuntimeID,
+		EnvironmentID: command.EnvironmentID,
+		Skills:        []publicRunSkill{},
+		MCP:           map[string]publicRunMCP{},
+	}
+	for _, skill := range harness.Skills {
+		snapshot.Skills = append(snapshot.Skills, publicRunSkill{
+			Name: skill.Name, VersionID: skill.VersionID, ContentDigest: skill.ContentDigest,
+		})
+		if skill.VersionID != "" {
+			snapshot.SkillVersionIDs = append(snapshot.SkillVersionIDs, skill.VersionID)
+		}
+	}
+	for name, server := range harness.MCP {
+		snapshot.MCP[name] = publicRunMCP{
+			Capability: server.Capability, VersionID: server.VersionID, ContentDigest: server.ContentDigest,
+		}
+	}
+	result.HarnessSnapshot = snapshot
+	return result
 }
 
 type publicTraceAttempt struct {
@@ -177,6 +295,22 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toPublicRun(run))
+}
+
+func (s *Server) handleConversationRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepository(w) {
+		return
+	}
+	_, _, runs, err := s.repository.GetConversation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeRepositoryError(w, err)
+		return
+	}
+	result := make([]publicRun, 0, len(runs))
+	for _, run := range runs {
+		result = append(result, toPublicRun(run))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": result})
 }
 
 func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
@@ -320,9 +454,6 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
-	if s.live != nil {
-		_ = s.live.RequestCancel(r.Context(), runID, 0)
-	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "cancelling"})
 }
 
@@ -372,7 +503,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		Model       publicModel `json:"model"`
 		Safety      any         `json:"safety"`
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": []publicAgent{{
+	agents := []publicAgent{{
 		ID:          s.profile.ID,
 		ProductName: s.profile.ProductName,
 		Model: publicModel{
@@ -380,5 +511,16 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 			ReasoningEffort: s.profile.Model.ReasoningEffort,
 		},
 		Safety: s.profile.Safety,
-	}}})
+	}}
+	for _, runtime := range s.runtimes {
+		if runtime.ID == s.profile.ID {
+			continue
+		}
+		agents = append(agents, publicAgent{
+			ID: runtime.ID, ProductName: runtime.Name,
+			Model:  publicModel{Provider: runtime.Model.Provider, Name: runtime.Model.Name, ReasoningEffort: runtime.Model.ReasoningEffort},
+			Safety: s.profile.Safety,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 }

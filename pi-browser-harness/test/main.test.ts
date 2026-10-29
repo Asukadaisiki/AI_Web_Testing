@@ -43,7 +43,8 @@ function makeFakeSession(opts: { hang?: boolean } = {}) {
   let listener: ((event: unknown) => void) | undefined;
   let releaseHang: (() => void) | undefined;
   const session = {
-    prompt: vi.fn(async () => {
+    prompt: vi.fn(async (text: string) => {
+      if (text === "/mcp") return;
       calls.prompt += 1;
       if (opts.hang) {
         await new Promise<void>((resolve) => {
@@ -68,6 +69,13 @@ function makeFakeSession(opts: { hang?: boolean } = {}) {
     },
     getActiveToolNames: vi.fn(() => []),
     getVerdict: vi.fn((): "succeeded" | "failed" => "failed"),
+    extensionRunner: {
+      emit: vi.fn().mockResolvedValue(undefined),
+      createToolContext: vi.fn(() => ({})),
+      getToolDefinition: vi.fn(() => ({
+        async execute() { return { structuredContent: { structuredContent: { closed: true } } }; },
+      })),
+    },
   };
   return { session, calls };
 }
@@ -102,6 +110,19 @@ async function makeDeps(
 }
 
 describe("main CLI", () => {
+  it("--server dispatches to the generic lifecycle without constructing a browser session", async () => {
+    const { stream: stdout, chunks } = collectingOutput();
+    const { fakeProc } = makeFakeProcess();
+    const code = await main({
+      argv: ["--server"],
+      sessionFactory: async () => { throw new Error("no runs submitted"); },
+      input: streamInput([JSON.stringify({ type: "shutdown" })]),
+      output: stdout,
+      process: fakeProc,
+    });
+    expect(code).toBe(0);
+    expect(chunks()).toBe('{"type":"harness.ready"}\n');
+  });
   it("writes only valid JSONL to stdout for a valid request", async () => {
     const { session } = makeFakeSession();
     const { stream: stdout, chunks } = collectingOutput();
@@ -168,7 +189,7 @@ describe("main CLI", () => {
     });
 
     // Let the run start and hang on prompt.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(calls.prompt).toBe(1));
     emitter.emit("SIGTERM");
     emitter.emit("SIGTERM");
 
@@ -193,7 +214,7 @@ describe("main CLI", () => {
     });
 
     // Let the run start and hang on prompt.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(calls.prompt).toBe(1));
     emitter.emit("SIGINT");
     emitter.emit("SIGINT");
 

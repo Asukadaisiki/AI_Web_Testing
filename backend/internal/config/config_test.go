@@ -1,9 +1,62 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestLoadBridgeConfiguration(t *testing.T) {
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://localhost/agenttrace")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	for mask := 0; mask < 8; mask++ {
+		t.Run(string(rune('0'+mask)), func(t *testing.T) {
+			for index, key := range []string{"AGENTTRACE_BRIDGE_TOKEN", "AGENTTRACE_PROJECT_ID", "AGENTTRACE_CONVERSATION_ID"} {
+				value := ""
+				if mask&(1<<index) != 0 {
+					value = []string{"test-bridge-token", "project_1", "conv_1"}[index]
+				}
+				t.Setenv(key, value)
+			}
+			cfg, err := Load()
+			if mask != 0 && mask != 7 {
+				if err == nil {
+					t.Fatal("partial bridge configuration accepted")
+				}
+				if strings.Contains(err.Error(), "test-bridge-token") {
+					t.Fatal("configuration error leaked token")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index, value := range []string{cfg.BridgeToken, cfg.BridgeProjectID, cfg.BridgeConversationID} {
+				want := ""
+				if mask == 7 {
+					want = []string{"test-bridge-token", "project_1", "conv_1"}[index]
+				}
+				if value != want {
+					t.Errorf("bridge field %d was not loaded", index)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadExporterProjectFilter(t *testing.T) {
+	setValidExporterEnvironment(t)
+	for _, value := range []string{"", " project_1 "} {
+		t.Setenv("AGENTTRACE_EXPORT_PROJECT_ID", value)
+		cfg, err := LoadExporter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ExportProjectID != strings.TrimSpace(value) {
+			t.Fatal("export project scope is missing or not loaded")
+		}
+	}
+}
 
 func TestLoadRequiresPostgresAndKafka(t *testing.T) {
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "")
@@ -66,6 +119,29 @@ func TestLoadUsesConfiguredOpenAICompatibleModelDefaults(t *testing.T) {
 		cfg.Model.ReasoningEffort != "high" ||
 		cfg.Model.APIKey != "runtime-only-secret" {
 		t.Fatalf("model configuration = %#v", cfg.Model)
+	}
+}
+
+func TestLoadModelProviderIsExplicitAndIndependentOfCredentials(t *testing.T) {
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://localhost/agenttrace")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	t.Setenv("AGENTTRACE_MODEL_API_KEY", "")
+	t.Setenv("AGENTTRACE_MODEL_PROVIDER", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "openai-compatible" {
+		t.Fatalf("provider = %q, want real model without API-side secrets", cfg.Model.Provider)
+	}
+	t.Setenv("AGENTTRACE_MODEL_PROVIDER", "scripted")
+	cfg, err = Load()
+	if err != nil || cfg.Model.Provider != "scripted" {
+		t.Fatalf("explicit fixture provider = %q, error = %v", cfg.Model.Provider, err)
+	}
+	t.Setenv("AGENTTRACE_MODEL_PROVIDER", "typo")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid provider accepted")
 	}
 }
 

@@ -1,0 +1,48 @@
+{
+  "checked_at": "2026-10-28T13:02:52.448Z",
+  "passed": true,
+  "api_origin": "http://127.0.0.1:8180",
+  "project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+  "langfuse_project_id": "agenttrace-native-project",
+  "conversation_id": "conv_f49cd6f52c1ab3e5246ba107d271dc6a",
+  "initial_count": 1,
+  "final_count": 2,
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/binding",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/conversations",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/conversations",
+      "status": 201,
+      "input": {
+        "title": "Langfuse BFF acceptance 2026-10-28T13:02:52.415Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/conversations",
+      "status": 200
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/conversations/conv_f49cd6f52c1ab3e5246ba107d271dc6a",
+      "status": 200,
+      "input": {
+        "state": "archived"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/projects/prj_2f2b5e037cfb0ce640841aa7702d50f9/conversations",
+      "status": 200
+    }
+  ]
+}

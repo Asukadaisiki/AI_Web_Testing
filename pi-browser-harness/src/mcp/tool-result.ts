@@ -25,6 +25,7 @@ export interface McpToolStructuredContent {
   failure?: DryRunFailure;
   case?: Case;
   dry_run?: ExecutionResult;
+  redacted_args?: string[];
 }
 
 /**
@@ -46,6 +47,7 @@ export function encodeToolOutcome(outcome: ToolOutcome): CallToolResult {
     ...(result.page !== undefined ? { page: result.page } : {}),
     steps: result.steps ?? [],
     ...(result.failure !== undefined ? { failure: result.failure } : {}),
+    ...(result.redacted_args !== undefined ? { redacted_args: result.redacted_args } : {}),
   };
   if (outcome.case !== undefined) {
     structured.case = outcome.case;

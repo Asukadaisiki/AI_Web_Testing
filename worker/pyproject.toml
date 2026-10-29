@@ -10,6 +10,7 @@ dependencies = [
     # Pin the browser package used by the Compose worker and local test suite.
     "playwright==1.57.0",
     "pydantic>=2.9",
+    "cryptography>=44",
 ]
 
 [dependency-groups]

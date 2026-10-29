@@ -8,10 +8,92 @@ import (
 	"testing"
 	"time"
 
+	inboxconsumer "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 )
+
+func TestConsumerDefersTemporaryRunnerContentionWithoutSpendingRetries(t *testing.T) {
+	cause := errors.New("scheduler capacity busy")
+	deferred := &temporaryDeliveryError{cause: cause}
+	retries := &memoryRetryStore{}
+	c := Consumer{
+		Inbox: &memoryInbox{}, Runner: &recordingRunner{err: deferred},
+		RetryStore: retries, MaxAttempts: 1,
+	}
+	if err := c.Handle(context.Background(), commandMessage(t, "evt-deferred", commandFor("run-deferred"))); !errors.Is(err, cause) {
+		t.Fatalf("deferred delivery = %v, want original contention cause", err)
+	}
+	if len(retries.incremented) != 0 || retries.handoffCount != 0 {
+		t.Fatalf("deferred delivery spent retries: %#v", retries)
+	}
+}
+
+func TestConsumerConsumeWaitsForDeferredClaimWithoutStoppingBus(t *testing.T) {
+	calls := 0
+	runner := &recordingRunner{}
+	retries := &memoryRetryStore{}
+	c := Consumer{
+		Inbox: inboxHandleFunc(func(ctx context.Context, _ eventbus.Message, handler func(context.Context) error) error {
+			calls++
+			if calls == 1 {
+				return inboxconsumer.ErrClaimInProgress
+			}
+			return handler(ctx)
+		}),
+		Runner: runner, RetryStore: retries, MaxAttempts: 1,
+	}
+	bus := &singleDeliveryBus{
+		Fake: &eventbus.Fake{}, message: commandMessage(t, "evt-deferred-consume", commandFor("run-deferred-consume")),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.Consume(ctx, bus, "runtime"); err != nil {
+		t.Fatalf("consume active claim: %v", err)
+	}
+	if runner.calls != 1 || calls != 2 || len(retries.incremented) != 0 {
+		t.Fatalf("runner/inbox/retries = %d/%d/%d, want 1/2/0", runner.calls, calls, len(retries.incremented))
+	}
+}
+
+func TestConsumerConsumeDeferredWaitHonorsCancellation(t *testing.T) {
+	c := Consumer{
+		Inbox: inboxHandleFunc(func(context.Context, eventbus.Message, func(context.Context) error) error {
+			return inboxconsumer.ErrClaimInProgress
+		}),
+		Runner: &recordingRunner{},
+	}
+	bus := &singleDeliveryBus{
+		Fake: &eventbus.Fake{}, message: commandMessage(t, "evt-deferred-cancel", commandFor("run-deferred-cancel")),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := c.Consume(ctx, bus, "runtime"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deferred cancellation = %v, want context deadline", err)
+	}
+}
+
+type temporaryDeliveryError struct{ cause error }
+
+func (e *temporaryDeliveryError) Error() string          { return e.cause.Error() }
+func (e *temporaryDeliveryError) Unwrap() error          { return e.cause }
+func (e *temporaryDeliveryError) DeliveryDeferred() bool { return true }
+
+type inboxHandleFunc func(context.Context, eventbus.Message, func(context.Context) error) error
+
+func (f inboxHandleFunc) Handle(ctx context.Context, m eventbus.Message, h func(context.Context) error) error {
+	return f(ctx, m, h)
+}
+
+type singleDeliveryBus struct {
+	*eventbus.Fake
+	message eventbus.Message
+}
+
+func (b *singleDeliveryBus) Consume(ctx context.Context, _ string, _ string, handler eventbus.Handler) error {
+	return handler(ctx, b.message)
+}
 
 func TestConsumerRunsOnlyAgentTraceRunCommandsOnce(t *testing.T) {
 	runner := &recordingRunner{}

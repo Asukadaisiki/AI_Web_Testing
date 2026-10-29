@@ -4,6 +4,7 @@ const apiURL = 'AGENTTRACE_API_URL';
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.resetModules();
 });
 
@@ -28,10 +29,28 @@ describe('Vite API proxy', () => {
   });
 
   it('lets the Playwright web server inherit the configured API address', async () => {
+    vi.stubEnv(apiURL, 'http://127.0.0.1:8280');
+    vi.stubEnv('AGENTTRACE_E2E_WEB_URL', 'http://127.0.0.1:5284');
     const config = (await import('../playwright.config')).default;
 
     expect(config.webServer).toMatchObject({
-      command: 'npm run dev -- --port 5175',
+      command: 'npm run dev -- --host 127.0.0.1 --port 5284',
+      url: 'http://127.0.0.1:5284',
+      reuseExistingServer: true,
+      env: { AGENTTRACE_API_URL: 'http://127.0.0.1:8280' },
     });
+    expect(config.use?.baseURL).toBe('http://127.0.0.1:5284');
+  });
+
+  it('uses the native API and web defaults without overrides', async () => {
+    vi.stubEnv(apiURL, undefined);
+    vi.stubEnv('AGENTTRACE_E2E_WEB_URL', undefined);
+    const config = (await import('../playwright.config')).default;
+
+    expect(config.webServer).toMatchObject({
+      url: 'http://127.0.0.1:5184',
+      env: { AGENTTRACE_API_URL: 'http://127.0.0.1:8180' },
+    });
+    expect(config.use?.baseURL).toBe('http://127.0.0.1:5184');
   });
 });

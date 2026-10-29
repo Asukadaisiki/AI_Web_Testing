@@ -1,0 +1,16 @@
+{
+  "started_at": "2026-10-28T13:21:12.643462+00:00",
+  "browser": "isolated Playwright Chromium",
+  "method": "Visible UI actions only; read-only DOM inspection; no API substitution",
+  "langfuse_project_id": "agenttrace-native-project",
+  "agenttrace_project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+  "commands": [],
+  "checks": [],
+  "checkpoints": [],
+  "network": [],
+  "page_errors": [],
+  "owned": {},
+  "gaps": [],
+  "fatal_error": "Locator.fill: Timeout 20000ms exceeded.\nCall log:\n  - waiting for get_by_label(\"Password\", exact=True)\n",
+  "updated_at": "2026-10-28T13:21:32.965193+00:00"
+}

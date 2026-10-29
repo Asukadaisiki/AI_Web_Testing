@@ -12,7 +12,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-func TestClientStoresCappedExpiringLiveEventsAndHints(t *testing.T) {
+func TestClientStoresCappedExpiringLiveEvents(t *testing.T) {
 	raw := integrationRedisClient(t)
 	ctx := context.Background()
 	client := NewClient(raw)
@@ -47,30 +47,6 @@ func TestClientStoresCappedExpiringLiveEventsAndHints(t *testing.T) {
 	if length > live.MaxStreamLength+200 {
 		t.Fatalf("stream length = %d, MAXLEN approximation did not trim", length)
 	}
-
-	if err := client.SetLease(ctx, "run-1", "worker-1", live.LeaseTTL); err != nil {
-		t.Fatalf("set lease: %v", err)
-	}
-	lease, err := raw.Get(ctx, leaseKey("run-1")).Result()
-	if err != nil {
-		t.Fatalf("read lease: %v", err)
-	}
-	if lease != "worker-1" {
-		t.Fatalf("lease owner = %q, want worker-1", lease)
-	}
-	assertTTL(t, raw, leaseKey("run-1"), live.LeaseTTL)
-
-	if err := client.RequestCancel(ctx, "run-1", live.CancelTTL); err != nil {
-		t.Fatalf("request cancel: %v", err)
-	}
-	canceled, err := client.IsCancelRequested(ctx, "run-1")
-	if err != nil {
-		t.Fatalf("read cancel hint: %v", err)
-	}
-	if !canceled {
-		t.Fatal("cancel hint was not recorded")
-	}
-	assertTTL(t, raw, cancelKey("run-1"), live.CancelTTL)
 }
 
 func TestClientTreatsFlushedStreamAsEmptyAndCancelsBlockingRead(t *testing.T) {

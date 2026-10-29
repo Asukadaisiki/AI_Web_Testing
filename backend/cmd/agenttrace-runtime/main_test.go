@@ -46,6 +46,13 @@ func TestRuntimeWiresPiRunnerAsSoleCommandRunner(t *testing.T) {
 			piRunner.DefaultReasoningEffort, profile.Model.ReasoningEffort,
 		)
 	}
+	closer, ok := runner.(interface{ Close() error })
+	if !ok {
+		t.Fatal("runtime runner does not own Harness shutdown")
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("close unused harness: %v", err)
+	}
 }
 
 func TestRuntimePoolConfigReservesConnectionsForConcurrentInboxHandlers(t *testing.T) {

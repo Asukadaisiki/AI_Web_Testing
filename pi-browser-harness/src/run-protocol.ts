@@ -1,11 +1,7 @@
 import type { Writable } from "node:stream";
 
-import {
-  parseExecutionResult,
-  validateCase,
-  type Case,
-  type ExecutionResult,
-} from "./browser/contract.js";
+import type { BrowserEventPayloads } from "./browser-protocol.js";
+import { parseExecutionSpec, type ExecutionSpec } from "./execution-spec.js";
 
 export const RUN_PROTOCOL_VERSION = "pi-browser-harness.v1" as const;
 
@@ -21,19 +17,34 @@ export interface RunRequest {
   attempt_id: string;
   goal: string;
   model: ModelRequest;
-  worker_url: string;
-  artifact_scope: string;
+  worker_url?: string;
+  artifact_scope?: string;
+  execution?: ExecutionSpec;
+  project_id?: string;
+  environment_id?: string;
+  profile_generation?: number;
+  fencing_token?: number;
 }
 
-export interface HarnessEventPayloads {
+export interface HarnessEventPayloads extends BrowserEventPayloads {
   "harness.started": Record<string, never>;
   "pi.message.completed": {
     text: string;
+    provider?: string;
+    model?: string;
+    input?: { messages: unknown[]; systemPrompt?: string; tools?: unknown[] };
+    started_at?: string;
+    ended_at?: string;
     [key: string]: unknown;
   };
   "pi.usage": {
+    provider?: string;
+    model?: string;
     input_tokens: number;
     output_tokens: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+    total_tokens?: number;
     [key: string]: unknown;
   };
   "pi.tool.started": {
@@ -48,17 +59,10 @@ export interface HarnessEventPayloads {
     structured_result?: Record<string, unknown>;
     [key: string]: unknown;
   };
-  "browser.observation": {
-    tool_call_id: string;
-    observation: unknown;
-  };
-  "browser.case.completed": {
-    verdict: "passed" | "failed";
-    case: Case;
-    dry_run: ExecutionResult;
-  };
   "harness.settled": {
     assistant_text: string;
+    verdict: "succeeded" | "failed";
+    error?: string;
     [key: string]: unknown;
   };
   "harness.failed": {
@@ -83,11 +87,6 @@ export type HarnessEvent = {
   };
 }[HarnessEventType];
 
-export interface TerminalState {
-  assistant_settled: boolean;
-  browser_case_verdicts: readonly ("passed" | "failed")[];
-}
-
 const RUN_REQUEST_KEYS = [
   "protocol_version",
   "run_id",
@@ -96,6 +95,11 @@ const RUN_REQUEST_KEYS = [
   "model",
   "worker_url",
   "artifact_scope",
+  "execution",
+  "project_id",
+  "environment_id",
+  "profile_generation",
+  "fencing_token",
 ] as const;
 
 const MODEL_REQUEST_KEYS = [
@@ -138,7 +142,9 @@ function isAbsoluteHttpUrl(value: unknown): value is string {
 
 export function parseRunRequest(input: string): RunRequest {
   const value: unknown = JSON.parse(input);
-  if (!isRecord(value) || !hasExactKeys(value, RUN_REQUEST_KEYS)) {
+  if (!isRecord(value) ||
+    Object.keys(value).some((key) => !(RUN_REQUEST_KEYS as readonly string[]).includes(key)) ||
+    !RUN_REQUEST_KEYS.slice(0, 5).every((key) => Object.hasOwn(value, key))) {
     throw new Error("invalid run request shape");
   }
 
@@ -154,11 +160,19 @@ export function parseRunRequest(input: string): RunRequest {
   if (!isNonBlankString(value.goal)) {
     throw new Error("goal must be non-blank");
   }
-  if (!isNonBlankString(value.artifact_scope)) {
+  if (Object.hasOwn(value, "artifact_scope") && !isNonBlankString(value.artifact_scope)) {
     throw new Error("artifact_scope must be non-blank");
   }
-  if (!isAbsoluteHttpUrl(value.worker_url)) {
+  if (Object.hasOwn(value, "worker_url") && !isAbsoluteHttpUrl(value.worker_url)) {
     throw new Error("worker_url must be an absolute HTTP URL");
+  }
+  const leaseKeys = ["project_id", "environment_id", "profile_generation", "fencing_token"];
+  if (leaseKeys.some((key) => Object.hasOwn(value, key))) {
+    if (!isNonBlankString(value.project_id) || !isNonBlankString(value.environment_id) ||
+      !Number.isSafeInteger(value.profile_generation) || (value.profile_generation as number) < 1 ||
+      !Number.isSafeInteger(value.fencing_token) || (value.fencing_token as number) < 1) {
+      throw new Error("complete managed environment lease identity is required");
+    }
   }
 
   const model = value.model;
@@ -174,12 +188,25 @@ export function parseRunRequest(input: string): RunRequest {
   if (!isNonBlankString(model.reasoning_effort)) {
     throw new Error("model.reasoning_effort must be non-blank");
   }
+  if (Object.hasOwn(value, "execution")) {
+    value.execution = parseExecutionSpec(value.execution);
+  }
 
   return value as unknown as RunRequest;
 }
 
 export class HarnessEventWriter {
   private sequence = 0;
+  private terminal = false;
+  private verdict: "succeeded" | "failed" | undefined;
+
+  get hasTerminalEvent(): boolean {
+    return this.terminal;
+  }
+
+  get terminalVerdict(): "succeeded" | "failed" | undefined {
+    return this.verdict;
+  }
 
   constructor(
     private readonly request: Pick<RunRequest, "run_id" | "attempt_id">,
@@ -190,7 +217,8 @@ export class HarnessEventWriter {
   write<Type extends HarnessEventType>(
     type: Type,
     payload: HarnessEventPayloads[Type],
-  ): Extract<HarnessEvent, { type: Type }> {
+  ): Extract<HarnessEvent, { type: Type }> | undefined {
+    if (this.terminal) return undefined;
     validateOutgoingPayload(type, payload);
     const event = {
       type,
@@ -201,6 +229,10 @@ export class HarnessEventWriter {
       payload,
     } as Extract<HarnessEvent, { type: Type }>;
 
+    if (type === "harness.settled" || type === "harness.failed") this.terminal = true;
+    if (type === "harness.settled") {
+      this.verdict = (payload as HarnessEventPayloads["harness.settled"]).verdict;
+    }
     this.output.write(`${JSON.stringify(event)}\n`);
     return event;
   }
@@ -210,51 +242,53 @@ function validateOutgoingPayload<Type extends HarnessEventType>(
   type: Type,
   payload: HarnessEventPayloads[Type],
 ): void {
-  if (type === "browser.observation") {
-    const observation = payload as HarnessEventPayloads["browser.observation"];
-    if (
-      !hasExactKeys(observation, ["tool_call_id", "observation"]) ||
-      !isNonBlankString(observation.tool_call_id)
-    ) {
-      throw new Error("invalid browser.observation payload");
+  if (type === "pi.message.completed" || type === "pi.usage") {
+    const identity = payload as HarnessEventPayloads["pi.message.completed"] | HarnessEventPayloads["pi.usage"];
+    for (const key of ["provider", "model"]) {
+      if (Object.hasOwn(identity, key) && !isNonBlankString(identity[key])) {
+        throw new Error(`invalid ${type} payload`);
+      }
+    }
+  }
+  if (type === "pi.message.completed") {
+    const completed = payload as HarnessEventPayloads["pi.message.completed"];
+    const hasStart = Object.hasOwn(completed, "started_at");
+    const hasEnd = Object.hasOwn(completed, "ended_at");
+    if (typeof completed.text !== "string" || hasStart !== hasEnd ||
+      (hasStart && (!isUtcTimestamp(completed.started_at) ||
+        !isUtcTimestamp(completed.ended_at) ||
+        Date.parse(completed.ended_at) < Date.parse(completed.started_at))) ||
+      (Object.hasOwn(completed, "input") && (!isRecord(completed.input) ||
+        !Array.isArray(completed.input.messages) ||
+        (Object.hasOwn(completed.input, "systemPrompt") && typeof completed.input.systemPrompt !== "string") ||
+        (Object.hasOwn(completed.input, "tools") && !Array.isArray(completed.input.tools))))) {
+      throw new Error("invalid pi.message.completed payload");
     }
     return;
   }
-  if (type !== "browser.case.completed") {
+  if (type === "pi.usage") {
+    const usage = payload as HarnessEventPayloads["pi.usage"];
+    for (const key of ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens"]) {
+      if ((key === "input_tokens" || key === "output_tokens" || Object.hasOwn(usage, key)) &&
+        (typeof usage[key] !== "number" || !Number.isSafeInteger(usage[key]) || usage[key] < 0)) {
+        throw new Error("invalid pi.usage payload");
+      }
+    }
     return;
   }
-
-  const completed = payload as HarnessEventPayloads["browser.case.completed"];
-  if (
-    !hasExactKeys(completed, ["verdict", "case", "dry_run"]) ||
-    (completed.verdict !== "passed" && completed.verdict !== "failed")
-  ) {
-    throw new Error("invalid browser.case.completed payload");
-  }
-  try {
-    const browserCase = validateCase(completed.case);
-    const dryRun = parseExecutionResult(completed.dry_run);
-    if (
-      browserCase.steps.length !== dryRun.steps.length ||
-      browserCase.steps.some(
-        (step, index) =>
-          dryRun.steps[index]?.index !== index ||
-          dryRun.steps[index]?.action !== step.action,
-      ) ||
-      (completed.verdict === "passed") !== (dryRun.status === "passed")
-    ) {
-      throw new Error("browser case evidence is inconsistent");
+  if (type === "harness.settled") {
+    const settled = payload as HarnessEventPayloads["harness.settled"];
+    if ((settled.verdict !== "succeeded" && settled.verdict !== "failed") ||
+      typeof settled.assistant_text !== "string" ||
+      (settled.error !== undefined && typeof settled.error !== "string")) {
+      throw new Error("invalid harness.settled payload");
     }
-  } catch {
-    throw new Error("invalid browser.case.completed payload");
+    return;
   }
 }
 
-export function deriveTerminalVerdict(
-  state: TerminalState,
-): "succeeded" | "failed" {
-  return state.assistant_settled &&
-    state.browser_case_verdicts.at(-1) === "passed"
-    ? "succeeded"
-    : "failed";
+function isUtcTimestamp(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(value) &&
+    Number.isFinite(Date.parse(value));
 }

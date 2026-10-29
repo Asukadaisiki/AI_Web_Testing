@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -12,17 +12,19 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { BROWSER_TOOL_NAMES } from "../src/mcp/schemas.js";
-import { createBrowserSession } from "../src/pi-session.js";
+import { createBrowserSession, type BrowserSession } from "../src/pi-session.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
 
 // A real stdio child exercises Pi's MCP initialization and tools/list discovery.
 // Absolute SDK URLs let the child run in an isolated directory without installs.
 const MCP_CHILD = `
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Server } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js"))};
 import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
-import { ListToolsRequestSchema } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/types.js"))};
+import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/types.js"))};
 
-const names = JSON.parse(process.env.MCP_TEST_TOOLS ?? ${JSON.stringify(JSON.stringify(BROWSER_TOOL_NAMES))});
+const names = JSON.parse(process.env.MCP_TEST_TOOLS ?? ${JSON.stringify(JSON.stringify([...BROWSER_TOOL_NAMES, "close_session"]))});
 const server = new Server(
   { name: "sequential-registration-fixture", version: "1.0.0" },
   { capabilities: { tools: {} } },
@@ -39,9 +41,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     annotations: { readOnlyHint: true, destructiveHint: false },
   })),
 }));
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name !== "close_session") throw new Error("unexpected lifecycle call");
+  return { content: [], structuredContent: { closed: true } };
+});
 const transport = new StdioServerTransport();
 transport.onclose = () => process.exit(0);
 await server.connect(transport);
+if (process.env.MCP_TEST_PID_DIR) {
+  writeFileSync(join(process.env.MCP_TEST_PID_DIR, String(process.pid) + ".pid"), "");
+}
 `;
 
 describe("sequential browser MCP registration", () => {
@@ -49,11 +58,13 @@ describe("sequential browser MCP registration", () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-sequential-mcp-"));
     const childPath = join(cwd, "mcp-child.mjs");
     let piSession: AgentSession | undefined;
+    let browserSession: BrowserSession | undefined;
     let unsubscribeErrors: (() => void) | undefined;
     const errors: unknown[] = [];
 
     try {
       vi.stubEnv("PI_CODING_AGENT_DIR", cwd);
+      vi.stubEnv("MCP_TEST_PID_DIR", cwd);
       writeFileSync(childPath, MCP_CHILD);
       writeFileSync(join(cwd, "mcp.json"), JSON.stringify({
         mcpServers: {
@@ -93,7 +104,7 @@ describe("sequential browser MCP registration", () => {
         },
       });
 
-      await createBrowserSession(request, {
+      browserSession = await createBrowserSession(request, {
         cwd,
         mcpChildPath: childPath,
         modelRuntime: runtime,
@@ -117,8 +128,9 @@ describe("sequential browser MCP registration", () => {
         (name) => `mcp__browser_harness__${name}`,
       );
       expect(session.getAllTools()
-        .filter((tool) => tool.name.startsWith("mcp__browser_harness__"))
+        .filter((tool) => tool.name.startsWith("mcp__browser_harness__") && tool.exposure !== "hidden")
         .map((tool) => tool.name).sort()).toEqual([...browserNames].sort());
+      expect(session.extensionRunner.getToolDefinition("mcp__browser_harness__close_session")?.exposure).toBe("hidden");
       expect(session.getActiveToolNames().sort()).toEqual([...browserNames].sort());
       expect(errors).toEqual([]);
 
@@ -161,8 +173,20 @@ describe("sequential browser MCP registration", () => {
         name,
         executionMode: "sequential",
       })));
+      const pids = readdirSync(cwd).filter((name) => name.endsWith(".pid"))
+        .map((name) => Number(name.slice(0, -4)));
+      expect(pids).toHaveLength(2);
+      for (const pid of pids) expect(() => process.kill(pid, 0)).not.toThrow();
+      await Promise.all([browserSession.close(), browserSession.close()]);
+      for (const pid of pids) {
+        expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
+      }
+      expect(errors).toEqual([]);
     } finally {
-      if (piSession !== undefined) {
+      if (browserSession !== undefined) {
+        await browserSession.close();
+        unsubscribeErrors?.();
+      } else if (piSession !== undefined) {
         await piSession.extensionRunner.emit({
           type: "session_shutdown",
           reason: "quit",

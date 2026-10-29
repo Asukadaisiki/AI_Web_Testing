@@ -319,6 +319,39 @@ async function startServer(
   return `http://127.0.0.1:${address.port}`;
 }
 
+it("sends lease metadata and host auth on every managed browser request", async () => {
+  const seen: { path: string; headers: IncomingMessage["headers"]; body: unknown }[] = [];
+  const baseUrl = await startServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    seen.push({ path: request.url!, headers: request.headers, body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null });
+    if (request.url === "/sessions") sendJson(response, { session_id: "managed_session" });
+    else if (request.method === "DELETE") sendJson(response, { closed: true });
+    else if (request.url === "/execute") sendJson(response, executionResult);
+    else if (request.url?.endsWith("/act")) sendJson(response, actResponse);
+    else sendJson(response, observation);
+  });
+  const environmentLease = { project_id: "p", environment_id: "env", profile_generation: 2, fencing_token: 7 };
+  const client = new WorkerClient(baseUrl, { environmentLease, providerToken: "host-only-secret" });
+  const id = await client.openSession("scope");
+  await client.navigate(id, "https://shop.test");
+  await client.act(id, actRequest);
+  await client.execute("scope", artifact);
+  await client.closeSession(id);
+  expect(seen[0]?.body).toEqual({ session_id: "scope", ...environmentLease });
+  expect(seen.find((r) => r.path === "/execute")?.body).toEqual({
+    session_id: "scope", case: artifact, ...environmentLease, browser_session_id: id,
+  });
+  expect(seen).toHaveLength(5);
+  for (const request of seen) {
+    expect(request.headers.authorization).toBe("Bearer host-only-secret");
+    expect(request.headers["x-profile-generation"]).toBe("2");
+    expect(request.headers["x-fencing-token"]).toBe("7");
+    expect(request.headers["x-environment-id"]).toBe("env");
+    expect(request.headers["x-project-id"]).toBe("p");
+  }
+});
+
 function sendJson(response: ServerResponse, value: unknown): void {
   response.setHeader("content-type", "application/json");
   response.end(JSON.stringify(value));

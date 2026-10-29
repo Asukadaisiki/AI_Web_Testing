@@ -87,6 +87,17 @@ function observation(
 }
 
 describe("buildPageView", () => {
+  it("omits password values even from an unsafe upstream observation", () => {
+    const secret = "PASSWORD_CANARY_DO_NOT_EMIT_20261028";
+    const password = { ...element("password", "Password"), tag: "input",
+      role: "textbox", text: "", value: secret, attributes: { type: "password" } };
+    const email = { ...element("email", "Email"), tag: "input",
+      role: "textbox", text: "", value: "member@example.test", attributes: { type: "email" } };
+    const view = buildPageView(observation({ elements: [password, email] }), "", null);
+    expect(JSON.stringify(view)).not.toContain(secret);
+    expect(view.elements.find((item) => item.ref === "email")?.value).toBe("member@example.test");
+  });
+
   it("enforces all compact bounds and reports stable omitted counts", () => {
     const current = observation({
       elements: Array.from({ length: 23 }, (_, index) =>

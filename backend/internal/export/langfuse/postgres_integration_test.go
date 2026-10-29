@@ -13,10 +13,104 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestPostgresHarnessCompletionExportsAllOutcomesWithRetryAndDeduplication(t *testing.T) {
+	for _, status := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed, domain.RunCancelled} {
+		t.Run(string(status), func(t *testing.T) {
+			ctx, pool, store := newExporterPostgresStore(t)
+			project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "completion"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{ProjectID: project.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+				ConversationID: conversation.ID, Content: "actual goal", AgentID: "browser-eval",
+				Model: event.ModelRef{Provider: "pi", Name: "model"}, IdempotencyKey: t.Name(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "provider-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status == domain.RunCancelled {
+				if err := store.RequestCancel(ctx, run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			finish := postgres.HarnessFinish{
+				RunID: run.ID, AttemptID: attempt.ID, Status: status,
+				Event: event.Envelope[json.RawMessage]{
+					SchemaVersion: "agenttrace.event.v1", EventID: "completion",
+					EventType: event.RunCompleted, AggregateID: run.ID,
+					CorrelationID: run.ID, OccurredAt: time.Now().UTC(),
+				},
+			}
+			for range 2 {
+				if _, err := store.FinishHarnessAttempt(ctx, finish); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var raw []byte
+			if err := pool.QueryRow(ctx, `SELECT payload FROM outbox_events WHERE key = $1 AND payload->>'event_type' = 'run.completed'`, run.ID).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			envelope, err := decodeEvent(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			completion, err := event.DecodeRunCompletion(envelope.EventType, envelope.AggregateID, envelope.Payload)
+			if err != nil || completion.Status != status {
+				t.Fatalf("completion = %#v, %v", completion, err)
+			}
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload ingestionRequest
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				if requests.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				} else {
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			defer server.Close()
+			client := newHTTPTestClient(t, server.URL, server.Client())
+			exporter := &Exporter{
+				Repository: store, Client: client,
+				Inbox:      PostgresInbox{Deduplicator: consumer.NewDeduplicator(pool, "completion-test")},
+				RetryStore: PostgresRetryStore{Store: store, Consumer: "completion-test"},
+			}
+			message := eventbus.Message{Topic: RunEventsTopic, Key: run.ID, Value: raw}
+			if err := exporter.Handle(ctx, message); err == nil {
+				t.Fatal("transient HTTP failure was acknowledged")
+			}
+			for range 2 {
+				if err := exporter.Handle(ctx, message); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if requests.Load() != 2 {
+				t.Fatalf("HTTP requests = %d, want failed attempt and one successful export", requests.Load())
+			}
+			unchanged, err := store.GetRun(ctx, run.ID)
+			if err != nil || unchanged.Status != status {
+				t.Fatalf("export altered canonical run: %#v, %v", unchanged, err)
+			}
+		})
+	}
+}
 
 func TestPostgresExporterFailureHandsOffOnceWithoutCanonicalMutation(t *testing.T) {
 	ctx, pool, store := newExporterPostgresStore(t)

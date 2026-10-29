@@ -27,6 +27,7 @@ import {
   type Conversation,
   type ConversationDetail,
   type DerivedTraceNode,
+  type ExecutionSelection,
   type Health,
   type ModelRef,
   type OperationEvidence,
@@ -134,6 +135,15 @@ const namedRunEvents = [
   'run.response.received',
   'runtime.step.completed',
   'runtime.completed',
+  'run.completed',
+  'harness.started',
+  'pi.tool.started',
+  'pi.tool.completed',
+  'pi.message.completed',
+  'pi.usage',
+  'browser.case.completed',
+  'harness.settled',
+  'harness.failed',
   'span.completed',
   'token.delta',
   'error',
@@ -207,6 +217,7 @@ export interface WorkspaceState {
     agentId: string,
     model: ModelRef,
     idempotencyKey: string,
+    execution?: ExecutionSelection,
   ) => Promise<boolean>;
   respond: (
     kind: 'question' | 'approval',
@@ -218,7 +229,7 @@ export interface WorkspaceState {
   refresh: () => Promise<void>;
 }
 
-export function useWorkspace(): WorkspaceState {
+export function useWorkspace({ legacyAgents = true }: { legacyAgents?: boolean } = {}): WorkspaceState {
   const [selection, dispatchSelection] = useReducer(
     workspaceSelectionReducer,
     window.location.search,
@@ -327,7 +338,7 @@ export function useWorkspace(): WorkspaceState {
     const request = ++systemDataRequest.current;
     const [nextProjects, nextAgents, nextHealth] = await Promise.all([
       listProjects(),
-      listAgents(),
+      legacyAgents ? listAgents() : Promise.resolve([]),
       getHealth(),
     ]);
     if (request !== systemDataRequest.current) return;
@@ -341,7 +352,7 @@ export function useWorkspace(): WorkspaceState {
     ) {
       dispatchSelection({ type: 'project', projectId: nextProjects[0]?.id ?? null });
     }
-  }, []);
+  }, [legacyAgents]);
 
   useEffect(() => {
     let cancelled = false;
@@ -550,6 +561,7 @@ export function useWorkspace(): WorkspaceState {
       agentId: string,
       model: ModelRef,
       idempotencyKey: string,
+      execution?: ExecutionSelection,
     ): Promise<boolean> => {
       if (selection.conversationId === null) return false;
       return perform(async () => {
@@ -558,6 +570,7 @@ export function useWorkspace(): WorkspaceState {
           agent_id: agentId,
           model,
           idempotency_key: idempotencyKey,
+          ...execution,
         });
         await loadConversation(selection.conversationId as string);
         dispatchSelection({ type: 'run', runId: created.run_id });

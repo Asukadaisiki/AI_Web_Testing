@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from playwright.async_api import Browser
@@ -53,11 +53,13 @@ from .contracts import (
     validate_case,
 )
 from .evidence import EvidenceCollector
+from .environments import EnvironmentPolicy, EnvironmentProvider
 from .locators import to_playwright_locator
 from .observer import new_id
+from .uploads import scoped_upload_root
 
 
-async def install_resource_filter(context) -> None:  # noqa: ANN001
+async def install_resource_filter(context, *, chained_policy=False) -> None:  # noqa: ANN001
     configured = os.environ.get("LOOP_BLOCKED_RESOURCE_HOSTS", "")
     blocked_hosts = {
         host.strip().lower() for host in configured.split(",") if host.strip()
@@ -73,6 +75,8 @@ async def install_resource_filter(context) -> None:  # noqa: ANN001
         )
         if blocked:
             await route.abort()
+        elif chained_policy:
+            await route.fallback()
         else:
             await route.continue_()
 
@@ -85,6 +89,10 @@ async def run_case(
     browser: Browser,
     session_id: str,
     execution_id: str | None = None,
+    environment_policy: EnvironmentPolicy | None = None,
+    upload_scope: str | None = None,
+    initial_storage_state: dict[str, Any] | None = None,
+    on_cleanup_error: Callable[[BaseException], None] | None = None,
 ) -> ExecutionResult:
     """执行整个 case，返回 ExecutionResult（永不抛业务异常）。
 
@@ -108,21 +116,34 @@ async def run_case(
             error=StepError(kind=SIGNAL_CASE_INVALID, message=f"{exc.code}: {exc.detail}"),
         )
 
-    context = await browser.new_context(viewport={"width": 1280, "height": 800})
-    await install_resource_filter(context)
-    page = await context.new_page()
-    # 兜底超时：不让任何漏传 timeout 的 Playwright 调用吃默认的 30s
-    page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)
-    page.set_default_navigation_timeout(DEFAULT_STEP_TIMEOUT_MS)
-    collector = EvidenceCollector(page)
+    context_options = {"viewport": {"width": 1280, "height": 800}}
+    if environment_policy is not None:
+        context_options.update(accept_downloads=False, service_workers="block")
+    if initial_storage_state is not None:
+        context_options["storage_state"] = initial_storage_state
+    context = None
+    page = None
     step_results: list[StepResult] = []
     status = "passed"
     error: StepError | None = None
-    final_url = page.url
+    final_url = ""
 
     try:
+        context = await browser.new_context(**context_options)
+        if environment_policy is not None:
+            await EnvironmentProvider.install_policy(context, environment_policy)
+        await install_resource_filter(context, chained_policy=environment_policy is not None)
+        page = await context.new_page()
+        # Bound calls that do not explicitly supply a Playwright timeout.
+        page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)
+        page.set_default_navigation_timeout(DEFAULT_STEP_TIMEOUT_MS)
+        collector = EvidenceCollector(page)
+        final_url = page.url
         for step in validated.steps:
-            result = await _run_step(page, collector, step, execution_id, session_id)
+            result = await _run_step(
+                page, collector, step, execution_id, session_id,
+                environment_policy=environment_policy, upload_scope=upload_scope,
+            )
             step_results.append(result)
             final_url = result.url_after
             if result.status == "failed":
@@ -138,10 +159,20 @@ async def run_case(
         except Exception:
             pass
     finally:
-        try:
-            await context.close()
-        except Exception:
-            pass
+        if context is not None:
+            try:
+                await context.close()
+            except BaseException as exc:
+                if on_cleanup_error is not None:
+                    on_cleanup_error(exc)
+                if not isinstance(exc, Exception):
+                    raise
+                status = "error"
+                detail = f"cleanup_uncertain: {type(exc).__name__}: {exc}"
+                error = StepError(
+                    kind=SIGNAL_WORKER_ERROR,
+                    message=f"{error.message}; {detail}" if error is not None else detail,
+                )
 
     return ExecutionResult(
         execution_id=execution_id,
@@ -162,6 +193,9 @@ async def _run_step(
     step: Step,
     execution_id: str,
     session_id: str,
+    *,
+    environment_policy: EnvironmentPolicy | None = None,
+    upload_scope: str | None = None,
 ) -> StepResult:
     url_before = page.url
     started_at = utc_now_iso()
@@ -184,6 +218,8 @@ async def _run_step(
     if status == "passed":
         try:
             if step.action == ACTION_GOTO:
+                if environment_policy is not None and not environment_policy.allows(step.value or ""):
+                    raise ActionFailure("domain_rejected", "URL is outside the Environment domain policy")
                 await actions.goto(page, step.value or "", step.timeout_ms)
             elif step.action in (
                 ACTION_CLICK,
@@ -228,7 +264,10 @@ async def _run_step(
                 elif step.action == ACTION_DISMISS_DIALOG:
                     await actions.dismiss_dialog(page, target_locator, step.timeout_ms)
                 elif step.action == ACTION_UPLOAD_FILE:
-                    recovery = await actions.upload_file_target(page, target_locator, step.value or "", step.timeout_ms)
+                    recovery = await actions.upload_file_target(
+                        page, target_locator, step.value or "", step.timeout_ms,
+                        upload_root=scoped_upload_root(upload_scope or session_id),
+                    )
             # assert_text / assert_url 不改动页面：断言由 postconditions 承担
         except ActionFailure as exc:
             status = "failed"

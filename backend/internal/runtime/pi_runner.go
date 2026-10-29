@@ -8,32 +8,38 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
 
-const cancellationPollInterval = 25 * time.Millisecond
+// A durable cancellation is checked at most four times per second per run.
+const cancellationPollInterval = 250 * time.Millisecond
 
-// HarnessProcessRunner starts a pi-browser-harness subprocess and streams
-// validated events to a callback. *piharness.ProcessRunner satisfies it.
+// HarnessProcessRunner submits an isolated execution session and streams
+// normalized events. Its transport can host any compatible Harness.
 type HarnessProcessRunner interface {
 	Run(ctx context.Context, request piharness.Request, onEvent func(piharness.Event)) error
 }
 
-// PiRunner drives one Pi browser-harness run: it claims the run, spawns the
-// harness, persists each event as EvalHub trace evidence, and derives the
-// objective terminal status from the harness verdict.
+type releaseAwareHarnessProcess interface {
+	RunWithRelease(context.Context, piharness.Request, func(piharness.Event)) (bool, error)
+}
+
+// PiRunner claims a run, submits its session, persists normalized trace
+// evidence, and records the selected Harness's objective verdict.
 type PiRunner struct {
 	Process                HarnessProcessRunner
 	Store                  PiTraceStore
 	WorkerURL              string
 	DefaultReasoningEffort string
+	LeaseTTL               time.Duration
 }
 
 // Run executes the harness for command and persists its trace. A replay of an
-// already terminal run spawns no child process and returns nil.
+// already terminal run creates no session and returns nil.
 func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 	if r.Process == nil {
 		return errors.New("pi runner process is required")
@@ -49,32 +55,94 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 	if errors.Is(err, postgres.ErrRunAlreadyTerminal) {
 		return nil
 	}
+	if errors.Is(err, postgres.ErrCapacityBusy) {
+		return consumer.DeferDelivery(err)
+	}
 	if err != nil {
 		return fmt.Errorf("start pi run: %w", err)
 	}
 
-	request := buildHarnessRequest(
-		command, r.WorkerURL, ref.ProviderAttemptID, r.DefaultReasoningEffort,
-	)
-
 	runState := &piRunState{}
 	processCtx, cancelProcess := context.WithCancel(ctx)
+	defer cancelProcess()
+	managed := ref.Fence.FencingToken > 0
+	var leases PiLeaseStore
+	var releaseProcess releaseAwareHarnessProcess
+	leaseErrors := make(chan error, 1)
+	leaseDone := make(chan struct{})
+	leaseExited := make(chan struct{})
+	if managed {
+		var ok bool
+		leases, ok = r.Store.(PiLeaseStore)
+		if !ok {
+			return errors.New("managed pi store requires lease lifecycle support")
+		}
+		releaseProcess, ok = r.Process.(releaseAwareHarnessProcess)
+		if !ok {
+			return errors.New("managed harness transport requires explicit release acknowledgement")
+		}
+		command.ProjectID = ref.Fence.ProjectID
+		command.EnvironmentID = ref.Fence.EnvironmentID
+		command.ProfileGeneration = ref.Fence.ProfileGeneration
+		command.FencingToken = ref.Fence.FencingToken
+		go r.watchLease(ctx, ref, leases, cancelProcess, leaseDone, leaseExited, leaseErrors)
+		defer func() {
+			close(leaseDone)
+			<-leaseExited
+		}()
+	}
+	workerURL := r.WorkerURL
+	if managed {
+		workerURL = ref.WorkerURL
+		if strings.TrimSpace(workerURL) == "" {
+			return errors.New("managed harness browser assignment endpoint is required")
+		}
+	}
+	request := buildHarnessRequest(command, workerURL, ref.ProviderAttemptID, r.DefaultReasoningEffort)
 	watchDone := make(chan struct{})
 	watchExited := make(chan struct{})
 	go r.watchCancellation(ctx, ref.RunID, cancelProcess, watchDone, watchExited)
 
-	processErr := r.Process.Run(processCtx, request, func(ev piharness.Event) {
-		runState.observe(ev)
-		if aerr := r.Store.AppendHarnessEvent(ctx, ref, ev); aerr != nil {
-			runState.appendErr = aerr
+	var processErr error
+	released := false
+	if !ref.CancelRequested {
+		onEvent := func(ev piharness.Event) {
+			if runState.appendErr != nil {
+				return
+			}
+			if aerr := r.Store.AppendHarnessEvent(ctx, ref, ev); aerr != nil {
+				runState.appendErr = aerr
+				cancelProcess()
+				return
+			}
+			runState.observe(ev)
 		}
-	})
+		if managed {
+			processErr = leases.MarkRunStarted(ctx, ref)
+			if processErr == nil {
+				released, processErr = releaseProcess.RunWithRelease(processCtx, request, onEvent)
+			}
+		} else {
+			processErr = r.Process.Run(processCtx, request, onEvent)
+		}
+	}
 	close(watchDone)
 	<-watchExited
 	cancelProcess()
 
-	if runState.appendErr != nil && processErr == nil {
-		processErr = runState.appendErr
+	select {
+	case leaseErr := <-leaseErrors:
+		return consumer.DeferDelivery(leaseErr)
+	default:
+	}
+	if errors.Is(runState.appendErr, postgres.ErrStaleFence) || errors.Is(processErr, postgres.ErrStaleFence) {
+		return consumer.DeferDelivery(postgres.ErrStaleFence)
+	}
+	if runState.appendErr != nil {
+		// Targeted cancellation waits for the host's cleanup acknowledgement.
+		// The underlying write failure, rather than our stop signal, determines
+		// the verdict and prevents unsafe automatic task replay.
+		processErr = fmt.Errorf("persist harness evidence: %w", runState.appendErr)
 	}
 
 	cancelRequested, cancelErr := r.Store.CancellationRequested(ctx, ref.RunID)
@@ -82,12 +150,45 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		processErr = fmt.Errorf("read cancellation state before completion: %w", cancelErr)
 	}
 	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested || cancelRequested)
-	status, completeErr := r.Store.CompleteHarnessRun(ctx, ref, outcome)
+	if managed && !released && !ref.CancelRequested {
+		outcome.Status = domain.RunFailed
+		outcome.Uncertain = true
+		if outcome.Error == "" {
+			outcome.Error = postgres.ErrReleaseUnacknowledged.Error()
+		}
+	}
+	// Retry only the terminal write, keeping the original verdict and assistant
+	// output. Even a cancelled delivery gets a bounded chance to persist it.
+	// If all writes fail, inbox redelivery reconciles the existing attempt
+	// instead of submitting another session.
+	completeCtx, cancelComplete := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelComplete()
+	var status domain.RunStatus
+	var completeErr error
+	for range 3 {
+		status, completeErr = r.Store.CompleteHarnessRun(completeCtx, ref, outcome)
+		if completeErr == nil || completeCtx.Err() != nil {
+			break
+		}
+	}
 	if completeErr != nil {
 		return fmt.Errorf("complete pi run: %w", completeErr)
 	}
 	if status != "" {
 		outcome.Status = status
+	}
+	if managed {
+		if ref.CancelRequested {
+			if err := leases.AbandonUnstartedRun(completeCtx, ref); err != nil {
+				return fmt.Errorf("abandon unstarted pi lease: %w", err)
+			}
+		} else if !released {
+			return &terminalRunError{cause: errors.New(outcome.Error)}
+		} else {
+			if err := leases.ReleaseRunLease(completeCtx, ref, released); err != nil {
+				return fmt.Errorf("release pi lease: %w", err)
+			}
+		}
 	}
 	if outcome.Status == domain.RunSucceeded {
 		return nil
@@ -99,6 +200,39 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		outcome.Error = "pi run terminated unsuccessfully"
 	}
 	return &terminalRunError{cause: errors.New(outcome.Error)}
+}
+
+func (r PiRunner) watchLease(ctx context.Context, ref HarnessAttemptRef, leases PiLeaseStore,
+	cancel context.CancelFunc, done <-chan struct{}, exited chan<- struct{}, errs chan<- error) {
+	defer close(exited)
+	ttl := r.LeaseTTL
+	if ttl == 0 {
+		ttl = postgres.DefaultHarnessLeaseTTL
+	}
+	interval := ttl / 3
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			cancel()
+			return
+		case <-ticker.C:
+		}
+		renewCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), interval)
+		err := leases.RenewRunLease(renewCtx, ref, ttl)
+		stop()
+		if err != nil {
+			errs <- errors.Join(postgres.ErrStaleFence, err)
+			cancel()
+			return
+		}
+	}
 }
 
 func (r PiRunner) watchCancellation(
@@ -140,22 +274,19 @@ func (r PiRunner) watchCancellation(
 }
 
 type piRunState struct {
-	latestCaseVerdict string
-	assistantText     string
-	failureError      string
-	appendErr         error
+	harnessVerdict string
+	assistantText  string
+	failureError   string
+	appendErr      error
 }
 
 func (s *piRunState) observe(ev piharness.Event) {
 	switch ev.Type {
-	case piharness.EventCaseCompleted:
-		var payload piharness.CaseCompletedPayload
-		_ = json.Unmarshal(ev.Payload, &payload)
-		s.latestCaseVerdict = payload.Verdict
 	case piharness.EventSettled:
 		var payload piharness.SettledPayload
 		_ = json.Unmarshal(ev.Payload, &payload)
 		s.assistantText = payload.AssistantText
+		s.harnessVerdict = payload.Verdict
 	case piharness.EventFailed:
 		var payload piharness.FailedPayload
 		_ = json.Unmarshal(ev.Payload, &payload)
@@ -171,12 +302,18 @@ func (r PiRunner) deriveOutcome(processErr error, state *piRunState, cancelReque
 		return PiRunOutcome{Status: domain.RunCancelled, Error: "run cancelled by durable cancel request", Assistant: state.assistantText}
 	}
 	if processErr == nil {
-		if state.latestCaseVerdict == "passed" {
+		if state.harnessVerdict == "succeeded" {
 			return PiRunOutcome{Status: domain.RunSucceeded, Assistant: state.assistantText}
+		}
+		if state.harnessVerdict == "failed" {
+			return PiRunOutcome{
+				Status: domain.RunFailed, Assistant: state.assistantText,
+				Error: "selected harness completion policy failed",
+			}
 		}
 		return PiRunOutcome{
 			Status:    domain.RunFailed,
-			Error:     "harness settled without a passing latest browser case",
+			Error:     "harness settled without an explicit completion verdict",
 			Assistant: state.assistantText,
 		}
 	}
@@ -202,10 +339,18 @@ func buildHarnessRequest(
 	workerURL, providerAttemptID, defaultReasoningEffort string,
 ) piharness.Request {
 	goal := ""
-	for i := len(command.Messages) - 1; i >= 0; i-- {
-		if command.Messages[i].Role == "user" {
-			goal = command.Messages[i].Content
-			break
+	for _, message := range command.Messages {
+		if message.Role != "user" {
+			continue
+		}
+		var metadata struct {
+			ResponseKind string `json:"response_kind"`
+		}
+		_ = json.Unmarshal(message.Metadata, &metadata)
+		if metadata.ResponseKind != "" {
+			goal += fmt.Sprintf("\n\nUser response (%s):\n%s", metadata.ResponseKind, message.Content)
+		} else {
+			goal = message.Content
 		}
 	}
 	if workerURL == "" {
@@ -228,7 +373,12 @@ func buildHarnessRequest(
 			Name:            command.Model.Name,
 			ReasoningEffort: reasoningEffort,
 		},
-		WorkerURL:     workerURL,
-		ArtifactScope: artifactScope,
+		WorkerURL:         workerURL,
+		ArtifactScope:     artifactScope,
+		Execution:         command.Execution.Clone(),
+		ProjectID:         command.ProjectID,
+		EnvironmentID:     command.EnvironmentID,
+		ProfileGeneration: command.ProfileGeneration,
+		FencingToken:      command.FencingToken,
 	}
 }

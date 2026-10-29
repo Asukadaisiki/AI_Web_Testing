@@ -66,7 +66,7 @@ func seedRunForHarness(t *testing.T, ctx context.Context, store *Store) domain.R
 }
 
 func TestPiBeginHarnessAttemptClaimsRunAndAllocatesAttempt(t *testing.T) {
-	ctx, _, store := newHarnessTestStore(t)
+	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
 
 	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-1")
@@ -87,13 +87,21 @@ func TestPiBeginHarnessAttemptClaimsRunAndAllocatesAttempt(t *testing.T) {
 		t.Fatalf("claimed run = %#v, want running with started_at", claimed)
 	}
 
-	// A second delivery (crash + redelivery) allocates attempt 2.
-	attempt2, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-2")
-	if err != nil {
-		t.Fatalf("second harness attempt: %v", err)
+	// A second delivery must reconcile the original attempt, never execute it again.
+	_, err = store.BeginHarnessAttempt(ctx, run.ID, "pi-att-2")
+	if !errors.Is(err, ErrRunAlreadyTerminal) {
+		t.Fatalf("second harness attempt: %v, want ErrRunAlreadyTerminal", err)
 	}
-	if attempt2.AttemptNumber != 2 {
-		t.Fatalf("second attempt number = %d, want 2", attempt2.AttemptNumber)
+	finished, err := store.GetRun(ctx, run.ID)
+	if err != nil || finished.Status != domain.RunFailed || finished.FinishedAt == nil {
+		t.Fatalf("reconciled run = %#v, %v, want terminal failed", finished, err)
+	}
+	var attempts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM harness_attempts WHERE run_id = $1`, run.ID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want original attempt only", attempts)
 	}
 }
 
@@ -122,6 +130,33 @@ func TestPiBeginHarnessAttemptRejectsTerminalRun(t *testing.T) {
 	_, err = store.BeginHarnessAttempt(ctx, run.ID, "pi-att-replay")
 	if !errors.Is(err, ErrRunAlreadyTerminal) {
 		t.Fatalf("begin on terminal run = %v, want ErrRunAlreadyTerminal", err)
+	}
+}
+
+func TestPiBeginHarnessAttemptRecoveryHonorsCancellation(t *testing.T) {
+	ctx, pool, store := newHarnessTestStore(t)
+	run := seedRunForHarness(t, ctx, store)
+	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-cancel-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Begin may have changed cancelling to running; retain the durable flag.
+	if _, err := pool.Exec(ctx, `UPDATE runs SET cancel_requested_at = now() WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-replay"); !errors.Is(err, ErrRunAlreadyTerminal) {
+		t.Fatalf("cancelled recovery: %v", err)
+	}
+	finished, err := store.GetRun(ctx, run.ID)
+	if err != nil || finished.Status != domain.RunCancelled || finished.FinishedAt == nil {
+		t.Fatalf("recovered cancellation = %#v, %v", finished, err)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM harness_attempts WHERE id = $1`, attempt.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("attempt status = %q, want cancelled", status)
 	}
 }
 
@@ -279,6 +314,24 @@ func TestPiFinishHarnessAttemptSetsTerminalStateAndRootSpan(t *testing.T) {
 	if rootStatus != string(domain.RunFailed) {
 		t.Fatalf("root span status = %q, want failed", rootStatus)
 	}
+	var terminalRaw json.RawMessage
+	if err := pool.QueryRow(ctx, `SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`, run.ID).Scan(&terminalRaw); err != nil {
+		t.Fatalf("read application completion: %v", err)
+	}
+	var terminal event.Envelope[json.RawMessage]
+	if err := json.Unmarshal(terminalRaw, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	var completion struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(terminal.Payload, &completion); err != nil {
+		t.Fatal(err)
+	}
+	if completion.RunID != run.ID || completion.Status != "failed" {
+		t.Fatalf("completion = %s", terminal.Payload)
+	}
 	var attemptStatus string
 	if err := pool.QueryRow(ctx, `SELECT status FROM harness_attempts WHERE id = $1`, attempt.ID).Scan(&attemptStatus); err != nil {
 		t.Fatalf("read attempt status: %v", err)
@@ -399,7 +452,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 		t.Errorf("run error = %s, want cancellation error", runError)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'harness.completed'`,
+		SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`,
 		run.ID).Scan(&terminalEnvelope); err != nil {
 		t.Fatalf("read terminal event: %v", err)
 	}
@@ -440,7 +493,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 	}
 	var terminalEvents, outboxEvents, assistantMessages int
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM run_events WHERE run_id = $1 AND event_type = 'harness.completed'`,
+		SELECT count(*) FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`,
 		run.ID).Scan(&terminalEvents); err != nil {
 		t.Fatalf("count replayed terminal events: %v", err)
 	}
@@ -659,9 +712,13 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 		t.Fatalf("lookup before finish sequence = %#v, want empty", missing)
 	}
 
-	retryAttempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-retry")
-	if err != nil {
-		t.Fatalf("begin retry attempt: %v", err)
+	// Seed a historical second attempt to exercise lookup isolation, not replay.
+	retryAttempt := HarnessAttempt{ID: "hat-historical"}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO harness_attempts (id, run_id, attempt_number, provider_attempt_id, status, started_at)
+		VALUES ($1, $2, 2, 'pi-att-historical', 'active', now())`,
+		retryAttempt.ID, run.ID); err != nil {
+		t.Fatalf("seed historical attempt: %v", err)
 	}
 	appendCompletedTool(
 		retryAttempt.ID,
@@ -685,7 +742,7 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 	}
 }
 
-func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testing.T) {
+func TestPiCrashRedeliveryReconcilesWithoutOverwritingEvidence(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
 
@@ -710,46 +767,95 @@ func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testi
 		t.Fatalf("append attempt 1 event: %v", err)
 	}
 
-	// Process crashes; redelivery allocates attempt 2.
-	attempt2, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-2")
-	if err != nil {
-		t.Fatalf("begin attempt 2: %v", err)
+	// A failed terminal write leaves side effects and evidence behind.
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION reject_terminal_write() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.status IN ('succeeded', 'failed', 'cancelled') THEN
+				RAISE EXCEPTION 'terminal persistence unavailable';
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER reject_terminal_write BEFORE UPDATE ON runs
+		FOR EACH ROW EXECUTE FUNCTION reject_terminal_write()`); err != nil {
+		t.Fatal(err)
 	}
-	if attempt2.AttemptNumber != 2 {
-		t.Fatalf("attempt 2 number = %d, want 2", attempt2.AttemptNumber)
+	_, err = store.FinishHarnessAttempt(ctx, HarnessFinish{
+		RunID: run.ID, AttemptID: attempt1.ID, Status: domain.RunSucceeded,
+		Event: harnessEnvelope(run.ID, attempt1.ID, 2, event.RunCompleted, `{}`),
+	})
+	if err == nil {
+		t.Fatal("expected terminal persistence failure")
 	}
-	// Attempt 2 writes its own model span with a different identity.
-	span2 := span1
-	span2.ID = "span-m2"
-	span2.SpanID = "span-m2"
-	att2 := att1
-	att2.ID = "att-m2"
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
-		RunID: run.ID, AttemptID: attempt2.ID, SourceSequence: 1, SourceType: "pi.message.completed",
-		Event: harnessEnvelope(run.ID, attempt2.ID, 1, "pi.message.completed", `{"text":"second"}`),
-		Span:  &span2, Attempt: &att2,
-	}); err != nil {
-		t.Fatalf("append attempt 2 event: %v", err)
+	// Recovery itself can fail; no new attempt may be allocated in that case.
+	restarted := NewStore(pool)
+	if _, err := restarted.BeginHarnessAttempt(ctx, run.ID, "pi-att-recovery-failed"); err == nil || errors.Is(err, ErrRunAlreadyTerminal) {
+		t.Fatalf("failed reconciliation = %v, want retryable persistence error", err)
+	}
+	if _, err := pool.Exec(ctx, `DROP TRIGGER reject_terminal_write ON runs`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := restarted.BeginHarnessAttempt(ctx, run.ID, "pi-att-redelivery"); !errors.Is(err, ErrRunAlreadyTerminal) {
+			t.Fatalf("restart redelivery = %v, want terminal without new attempt", err)
+		}
 	}
 
 	var modelSpans int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM spans WHERE run_id = $1 AND kind = 'model'`, run.ID).Scan(&modelSpans); err != nil {
 		t.Fatalf("count model spans: %v", err)
 	}
-	if modelSpans != 2 {
-		t.Fatalf("model spans = %d, want 2 (prior evidence preserved)", modelSpans)
+	if modelSpans != 1 {
+		t.Fatalf("model spans = %d, want 1 (prior evidence preserved, no replay)", modelSpans)
 	}
 
-	// Each attempt has exactly one source sequence 1 event.
-	var attempt1Events, attempt2Events int
+	var attempt1Events, attempts, terminalEvents int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE harness_attempt_id = $1`, attempt1.ID).Scan(&attempt1Events); err != nil {
 		t.Fatalf("count attempt 1 events: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE harness_attempt_id = $1`, attempt2.ID).Scan(&attempt2Events); err != nil {
-		t.Fatalf("count attempt 2 events: %v", err)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM harness_attempts WHERE run_id = $1`, run.ID).Scan(&attempts); err != nil {
+		t.Fatal(err)
 	}
-	if attempt1Events != 1 || attempt2Events != 1 {
-		t.Fatalf("attempt events = %d / %d, want 1 / 1", attempt1Events, attempt2Events)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`, run.ID).Scan(&terminalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if attempt1Events != 1 || attempts != 1 || terminalEvents != 1 {
+		t.Fatalf("evidence / attempts / terminal events = %d / %d / %d, want 1 each", attempt1Events, attempts, terminalEvents)
+	}
+	var status, rootStatus string
+	var finishedAt *time.Time
+	var runError json.RawMessage
+	if err := pool.QueryRow(ctx, `SELECT status, finished_at FROM harness_attempts WHERE id = $1`, attempt1.ID).Scan(&status, &finishedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || finishedAt == nil {
+		t.Fatalf("original attempt = %s / %v, want terminal failed", status, finishedAt)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM spans WHERE run_id = $1 AND kind = 'run'`, run.ID).Scan(&rootStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT error FROM runs WHERE id = $1`, run.ID).Scan(&runError); err != nil {
+		t.Fatal(err)
+	}
+	if rootStatus != "failed" || !strings.Contains(string(runError), "needs_reconciliation") {
+		t.Fatalf("root / error = %s / %s, want failed reconciliation", rootStatus, runError)
+	}
+	var terminal, outbox json.RawMessage
+	if err := pool.QueryRow(ctx, `SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`, run.ID).Scan(&terminal); err != nil {
+		t.Fatal(err)
+	}
+	var envelope event.Envelope[event.RunCompletion]
+	if err := json.Unmarshal(terminal, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Payload.Status != domain.RunFailed || !envelope.OccurredAt.Equal(attempt1.StartedAt) {
+		t.Fatalf("recovery completion = %s, want failed with stable occurrence time", terminal)
+	}
+	if err := pool.QueryRow(ctx, `SELECT payload FROM outbox_events WHERE event_id = $1`, envelope.EventID).Scan(&outbox); err != nil {
+		t.Fatal(err)
+	}
+	if string(outbox) != string(terminal) {
+		t.Fatal("recovery completion not durably queued for UI")
 	}
 }
 

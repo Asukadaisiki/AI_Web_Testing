@@ -4,7 +4,7 @@ set -euo pipefail
 topics_bin="${AGENTTRACE_KAFKA_TOPICS_BIN:-/opt/kafka/bin/kafka-topics.sh}"
 bootstrap_server="${AGENTTRACE_KAFKA_BOOTSTRAP_SERVER:-kafka:9092}"
 partition_count="${AGENTTRACE_KAFKA_PARTITIONS:-8}"
-topics="${AGENTTRACE_KAFKA_TOPICS:-agenttrace.run.commands.v1 agenttrace.run.events.v1 agenttrace.run.dlq.v1 agenttrace.test.commands.v1}"
+topics="${AGENTTRACE_KAFKA_TOPICS:-agenttrace.run.commands.v1 agenttrace.run.events.v1 agenttrace.run.dlq.v1 agenttrace.environment.commands.v1 agenttrace.test.commands.v1}"
 
 if [[ ! "$partition_count" =~ ^[1-9][0-9]*$ ]]; then
   echo "AGENTTRACE_KAFKA_PARTITIONS must be a positive integer" >&2

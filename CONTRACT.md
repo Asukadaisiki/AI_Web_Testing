@@ -13,7 +13,8 @@ persistence or legacy session-control fallback.
 | Workspace HTTP, SSE, and health | `backend/internal/api/v3` |
 | Durable run, event, and Trace types | `backend/internal/domain`, `backend/internal/event` |
 | PostgreSQL transactions and Trace projection | `backend/internal/postgres` |
-| Runtime checkpoints and Pi harness execution | `backend/internal/runtime`, `backend/internal/piharness` |
+| Runtime checkpoints and shared SDK host execution | `backend/internal/runtime`, `backend/internal/piharness` |
+| SDK-free Runtime/Harness snapshots | `backend/internal/execution`, `pi-browser-harness/src/execution-spec.ts` |
 | Server-owned model defaults and safety policy | `backend/internal/agentprofile` |
 | Browser case, observation, and execution types | `backend/internal/contract` |
 | Worker HTTP service and Playwright execution | `worker/loop_worker/main.py`, `runner.py` |
@@ -42,15 +43,64 @@ a second persisted message, span, operation result, or terminal transition.
 `GET /api/v1/runs/{id}/events` replays durable PostgreSQL events and may use
 Redis only to reduce live-update latency.
 
-The production agent loop runs inside a per-Run Pi browser harness subprocess.
-The Go runtime starts one isolated harness process per active Run, feeds it a
-single `pi-browser-harness.v1` request on stdin, and consumes newline-delimited
-JSONL events from stdout. The harness embeds Pi, force-loads the
-browser-case-authoring skill, and exposes only Run-scoped browser MCP tools
-backed by deterministic TypeScript logic and the worker HTTP API. The runtime
-maps harness events to durable Trace records and derives terminal Run status
-only from objective browser execution evidence. Assistant prose and Pi
-settlement never override the objective execution verdict.
+The production runtime owns one long-lived session host subprocess. Each
+execution attempt selects an independent Pi, Claude Code or Codex session.
+The host routes `pi-browser-harness.v1` events by Run and Attempt and
+accepts separate run, cancel and shutdown commands over JSONL. A concurrency
+slot remains occupied until `harness.released` confirms awaited resource cleanup.
+
+Harness definitions supply prompts, skills, allowed tools, MCP descriptors and
+an objective completion policy independently of the Pi SDK and Langfuse. The
+default Pi browser harness force-loads browser-case-authoring and requires the
+latest complete browser replay to pass. A replacement Harness reports its own
+`succeeded` or `failed` verdict in `harness.settled`; old events without a verdict
+retain the browser-evidence fallback. Durable cancellation overrides either
+verdict. Assistant prose alone does not determine success.
+
+## Runtime and Harness catalog
+
+`GET /api/v1/runtimes` returns `runtimes` containing `id`, `name`, public
+`model`, `available`, and optional `unavailable_reason`. Availability describes
+local configuration and executable readiness; external provider reachability
+is checked by actual execution.
+
+In compatibility mode Harnesses use `GET/POST /api/v1/harnesses` and
+`GET/PUT/DELETE /api/v1/harnesses/{id}`. A snapshot contains `id`, `name`,
+`revision`, `system_prompt`, `skills` and `mcp`. PUT replaces the definition and
+increments its revision. Skill files have scoped relative paths. MCP descriptors
+accept only reviewed deployed `capability`, validated `config` and scoped
+`secret_refs`; arbitrary command/args/env and `env:VARIABLE_NAME` are rejected.
+
+Management mode uses project-scoped immutable Skill and Harness versions,
+system-owned MCP versions and project bindings. All requests authenticate the
+server bridge and explicit project, Langfuse project, actor and role. Conversation
+and Environment ownership are checked at the API and provider boundaries.
+See [management wire contracts](integration/langfuse-management/CONTRACTS.md)
+and [deployment setup](docs/management-runtime-setup.md).
+
+Message submission accepts `runtime_id` and `harness_id` together. The server
+selects the model and persists the copied `execution` snapshot in the Run and
+queued command atomically. Management idempotency hashes the requested selection
+before resolution so a replay returns the original Run despite later registry
+changes. Existing Agent/model-only requests retain legacy behavior.
+Run responses include a sanitized immutable snapshot with selected Runtime,
+version identities and digests. Rerun copies the source snapshot and uses the
+current ready Environment generation after explicit review or reset.
+
+The official SDK adapters are Pi, Claude Agent SDK `query`, and Codex SDK
+`startThread/runStreamed`. The `pi.*` event names are normalized compatibility
+names for all three adapters. Model completion precedes its usage records.
+Claude query-level usage and Codex turn-level usage are labeled as such; the
+platform does not infer individual call inputs/times from cumulative results.
+Claude cumulative query/model usage has distinct record identities and belongs
+to the Run root. Langfuse exports it as Trace/root metadata rather than assigning
+the cumulative tokens to an individual GENERATION.
+
+Codex's optional `AGENTTRACE_CODEX_TOOL_FORMAT=flat-functions` converts only the
+selected MCP namespace declarations and callable names at the Responses
+provider boundary. It preserves arguments, tool results, usage and actual SDK
+execution. The default is `native`; no adapter silently substitutes another
+runtime on provider failure.
 
 ## Browser Case
 
@@ -68,7 +118,7 @@ A case is the only executable browser artifact:
 
 `steps` is non-empty and its first action is `goto`. The case is authored
 through the browser-case-authoring skill and browser MCP tools exposed by the
-Pi harness, not by the model emitting raw case JSON. The deterministic case
+selected SDK adapter. The deterministic case
 builder grounds targets, validates expectations, and runs a fresh-context dry
 run before `finish_case` can settle a passing evaluation. The operation schema
 is the server-side input boundary, `backend/internal/contract.Validate`
@@ -193,12 +243,17 @@ already part of prompt tokens; neither is added twice. The normalized type is
 `backend/internal/usage.Usage`; runtime writes it with the corresponding
 durable Trace attempt.
 
-The runtime passes the durable conversation, server-owned model defaults, and
-reasoning effort to the Pi harness. The harness selects the model provider and
-owns the conversation context, turns, and tool dispatch. The default scripted
-fixture provider returns deterministic model responses for the local stack; an
-OpenAI-compatible provider may instead be configured at runtime. Provider
-configuration is environment-owned and never enters Run history as a secret.
+The runtime passes the current Run's latest user goal, public model reference
+and reasoning effort to the Harness. The selected official SDK owns the
+evolving model context, turns and tool dispatch. `AGENTTRACE_MODEL_PROVIDER` selects Pi's default
+real OpenAI-compatible `glm-5.3-flash` or the deterministic scripted fixture.
+Credentials remain in Runtime's environment.
+
+Each `pi.message.completed` may carry `input` with the actual transformed
+messages and paired `started_at`/`ended_at` UTC call times. Usage preserves
+reported total and cache token fields; unreported billed cost is absent.
+Missing model input/time remains unknown rather than an empty request or
+zero-duration observation.
 
 ## Optional Langfuse Export
 
@@ -206,3 +261,10 @@ configuration is environment-owned and never enters Run history as a secret.
 completed v3 runs to Langfuse. Its retry and DLQ contract is implemented in
 `backend/internal/export/langfuse`. It never blocks API acceptance, operation
 execution, local completion, or product reads.
+
+New producers publish `run.completed` with `{run_id, status, error?}` where
+status is `succeeded`, `failed` or `cancelled`. Legacy `runtime.completed` and
+`harness.completed` queued records are accepted only by the export migration
+reader. Durable completion and its outbox record are committed atomically.
+Kafka Live Notifier writes disposable `run.events.available` Redis wakeups;
+SSE always emits persisted events identified by their PostgreSQL sequence.

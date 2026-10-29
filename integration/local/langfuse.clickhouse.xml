@@ -1,0 +1,46 @@
+<clickhouse>
+  <logger>
+    <level>warning</level>
+    <console>true</console>
+  </logger>
+  <listen_host>127.0.0.1</listen_host>
+  <http_port>8123</http_port>
+  <tcp_port>9000</tcp_port>
+  <path from_env="AGENTTRACE_CLICKHOUSE_DATA"/>
+  <tmp_path from_env="AGENTTRACE_CLICKHOUSE_TMP"/>
+  <user_files_path from_env="AGENTTRACE_CLICKHOUSE_USER_FILES"/>
+  <max_connections>128</max_connections>
+  <max_concurrent_queries>50</max_concurrent_queries>
+  <background_pool_size>16</background_pool_size>
+  <background_schedule_pool_size>16</background_schedule_pool_size>
+  <background_message_broker_schedule_pool_size>4</background_message_broker_schedule_pool_size>
+  <background_distributed_schedule_pool_size>4</background_distributed_schedule_pool_size>
+  <mark_cache_size>268435456</mark_cache_size>
+  <profiles>
+    <default>
+      <max_memory_usage>2000000000</max_memory_usage>
+      <max_threads>4</max_threads>
+      <async_insert>1</async_insert>
+      <wait_for_async_insert>1</wait_for_async_insert>
+    </default>
+  </profiles>
+  <users>
+    <agenttrace>
+      <password_sha256_hex from_env="AGENTTRACE_CLICKHOUSE_PASSWORD_SHA256"/>
+      <networks><ip>127.0.0.1</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+    </agenttrace>
+    <default>
+      <password></password>
+      <networks><ip>127.0.0.1</ip></networks>
+      <profile>default</profile>
+      <quota>default</quota>
+      <access_management>1</access_management>
+    </default>
+  </users>
+  <quotas>
+    <default><interval><duration>3600</duration><queries>0</queries><errors>0</errors><result_rows>0</result_rows><read_rows>0</read_rows><execution_time>0</execution_time></interval></default>
+  </quotas>
+  <distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>
+</clickhouse>

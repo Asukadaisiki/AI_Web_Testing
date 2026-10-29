@@ -16,11 +16,12 @@ type Config struct {
 	Database int
 }
 
-// Target requires the Compose Redis service and a dedicated logical database.
+// Target permits local Redis and a dedicated logical database.
 func Target(address, rawDatabase string) (Config, error) {
-	if strings.TrimSpace(address) != composeAddress {
+	address = strings.TrimSpace(address)
+	if address != composeAddress && address != "127.0.0.1:6379" && address != "localhost:6379" {
 		return Config{}, fmt.Errorf(
-			"refusing destructive Redis reset for address %q: require Compose service %q",
+			"refusing destructive Redis reset for address %q: require loopback Redis or Compose service %q",
 			address, composeAddress,
 		)
 	}
@@ -28,7 +29,7 @@ func Target(address, rawDatabase string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Config{Address: composeAddress, Database: database}, nil
+	return Config{Address: address, Database: database}, nil
 }
 
 // DatabaseNumber accepts only dedicated Redis databases, never the default DB 0.

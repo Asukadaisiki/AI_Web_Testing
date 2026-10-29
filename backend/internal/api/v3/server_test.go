@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,7 +40,6 @@ func TestArtifactsServesConfiguredSharedVolumeFile(t *testing.T) {
 		Profile:     profile,
 		ArtifactDir: artifactDir,
 		Stream:      stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
-		Live:        live.NewMemoryStore(),
 	}).Handler()
 
 	response := request(t, handler, http.MethodGet, "/artifacts/run_1/evidence.png", "")
@@ -835,7 +835,7 @@ func TestEventsResumeFromLastEventID(t *testing.T) {
 	req.Header.Set("Last-Event-ID", "1")
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
-	recorder := httptest.NewRecorder()
+	recorder := &synchronizedRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	done := make(chan struct{})
 	go func() {
@@ -854,7 +854,7 @@ func TestEventsResumeFromLastEventID(t *testing.T) {
 
 func TestCancelPersistsWhenRedisFails(t *testing.T) {
 	repository := &fakeRepository{}
-	handler := newTestServerWithLive(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}), failingLiveStore{})
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, failingLiveStore{}, stream.Config{}))
 
 	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/cancel", `{}`)
 	if response.Code != http.StatusAccepted {
@@ -969,30 +969,33 @@ func TestAgentsDoNotExposeServerCallbackURLsOrCredentials(t *testing.T) {
 	}
 }
 
-func TestEventsEncodeEphemeralEventsWithoutID(t *testing.T) {
+func TestEventsEmitOnlyPostgreSQLPayloadsAndSequences(t *testing.T) {
 	liveStore := live.NewMemoryStore()
 	if err := liveStore.Append(context.Background(), "run_1", live.LiveEvent{
 		Type: "token.delta", Data: json.RawMessage(`{"delta":"hi"}`),
 	}); err != nil {
 		t.Fatalf("append live event: %v", err)
 	}
-	handler := newTestServer(t, &fakeRepository{}, stream.NewService(&fakeEventReader{}, liveStore, stream.Config{
+	reader := &fakeEventReader{events: []stream.DurableEvent{{
+		Sequence: 7, Type: "run.started", Data: json.RawMessage(`{"status":"running"}`),
+	}}}
+	handler := newTestServer(t, &fakeRepository{}, stream.NewService(reader, liveStore, stream.Config{
 		ReadBlock: time.Millisecond,
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run_1/events", nil)
-	ctx, cancel := context.WithCancel(req.Context())
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Millisecond)
+	defer cancel()
 	req = req.WithContext(ctx)
 	recorder := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		handler.ServeHTTP(recorder, req)
-		close(done)
-	}()
-	waitForBody(t, recorder, "event: token.delta")
-	cancel()
-	<-done
-	if strings.Contains(recorder.Body.String(), "id:") {
-		t.Fatalf("ephemeral SSE must not include an id: %q", recorder.Body.String())
+	handler.ServeHTTP(recorder, req)
+	body := recorder.Body.String()
+	if !strings.Contains(body, "id: 7\n") || !strings.Contains(body, "event: run.started\n") ||
+		!strings.Contains(body, `data: {"status":"running"}`) {
+		t.Fatalf("durable SSE missing: %q", body)
+	}
+	if strings.Contains(body, "token.delta") || strings.Contains(body, `"delta"`) ||
+		strings.Contains(body, "run.events.available") {
+		t.Fatalf("Redis payload escaped into SSE: %q", body)
 	}
 }
 
@@ -1007,13 +1010,12 @@ func TestEventsHeartbeatAndRequestCancellation(t *testing.T) {
 		Stream: stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{
 			ReadBlock: time.Hour,
 		}),
-		Live:              live.NewMemoryStore(),
 		HeartbeatInterval: time.Millisecond,
 	}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run_1/events", nil)
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
-	recorder := httptest.NewRecorder()
+	recorder := &synchronizedRecorder{ResponseRecorder: httptest.NewRecorder()}
 	done := make(chan struct{})
 	go func() {
 		handler.ServeHTTP(recorder, req)
@@ -1042,11 +1044,6 @@ func TestResponsePersistsAndEnqueuesContinuation(t *testing.T) {
 
 func newTestServer(t *testing.T, repository *fakeRepository, service *stream.Service) http.Handler {
 	t.Helper()
-	return newTestServerWithLive(t, repository, service, live.NewMemoryStore())
-}
-
-func newTestServerWithLive(t *testing.T, repository *fakeRepository, service *stream.Service, liveStore live.LiveStore) http.Handler {
-	t.Helper()
 	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
@@ -1055,7 +1052,6 @@ func newTestServerWithLive(t *testing.T, repository *fakeRepository, service *st
 		Repository: repository,
 		Profile:    profile,
 		Stream:     service,
-		Live:       liveStore,
 		Health: healthDependencies{
 			Postgres: func(context.Context) error { return nil },
 			Kafka:    func(context.Context) error { return nil },
@@ -1075,7 +1071,6 @@ func newTestServerWithHealth(t *testing.T, repository *fakeRepository, health he
 		Repository: repository,
 		Profile:    profile,
 		Stream:     stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
-		Live:       live.NewMemoryStore(),
 		Health:     health,
 	}).Handler()
 }
@@ -1112,16 +1107,39 @@ func assertErrorCode(t *testing.T, recorder *httptest.ResponseRecorder, status i
 	}
 }
 
-func waitForBody(t *testing.T, recorder *httptest.ResponseRecorder, want string) {
+type synchronizedRecorder struct {
+	*httptest.ResponseRecorder
+	mu sync.Mutex
+}
+
+func (r *synchronizedRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ResponseRecorder.Write(p)
+}
+
+func (r *synchronizedRecorder) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ResponseRecorder.Flush()
+}
+
+func (r *synchronizedRecorder) bodyString() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Body.String()
+}
+
+func waitForBody(t *testing.T, recorder *synchronizedRecorder, want string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(recorder.Body.String(), want) {
+		if strings.Contains(recorder.bodyString(), want) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("SSE body never contained %q: %q", want, recorder.Body.String())
+	t.Fatalf("SSE body never contained %q: %q", want, recorder.bodyString())
 }
 
 type fakeRepository struct {
@@ -1228,13 +1246,4 @@ func (failingLiveStore) Append(context.Context, string, live.LiveEvent) error {
 }
 func (failingLiveStore) Read(context.Context, string, string, time.Duration) ([]live.LiveEvent, error) {
 	return nil, errors.New("redis unavailable")
-}
-func (failingLiveStore) SetLease(context.Context, string, string, time.Duration) error {
-	return errors.New("redis unavailable")
-}
-func (failingLiveStore) RequestCancel(context.Context, string, time.Duration) error {
-	return errors.New("redis unavailable")
-}
-func (failingLiveStore) IsCancelRequested(context.Context, string) (bool, error) {
-	return false, errors.New("redis unavailable")
 }

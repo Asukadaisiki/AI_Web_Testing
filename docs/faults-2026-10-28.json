@@ -1,0 +1,25 @@
+{
+  "persistence_failure_isolation": {
+    "status": "passed",
+    "failed_run": "run_123a27c136ae5af8da1d8912ce6ce975",
+    "healthy_run": "run_3079ca785319b9bbbb82f145f0d2f09e",
+    "harness_attempts": 1,
+    "evidence_frozen": true,
+    "worker_actions": 1,
+    "worker_actions_frozen": true,
+    "healthy_worker_execution_audited": true
+  },
+  "redis_degraded_replay": {
+    "status": "passed",
+    "health": "degraded"
+  },
+  "kafka_outbox_recovery": {
+    "status": "passed",
+    "run_id": "run_1fcf5087836fc469eb856069f797bb10"
+  },
+  "langfuse_async_retry": {
+    "status": "passed",
+    "run_id": "run_01543e79d4d635e07146950f5b995ccc"
+  },
+  "status": "passed"
+}

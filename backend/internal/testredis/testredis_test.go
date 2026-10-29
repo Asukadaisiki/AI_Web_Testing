@@ -24,7 +24,7 @@ func TestDatabaseNumberAcceptsDedicatedDatabase(t *testing.T) {
 }
 
 func TestTargetRequiresComposeAddressAndDedicatedDatabase(t *testing.T) {
-	for _, address := range []string{"", "127.0.0.1:6379", "redis:6380", "live-redis:6379"} {
+	for _, address := range []string{"", "10.0.0.1:6379", "redis:6380", "live-redis:6379"} {
 		if _, err := Target(address, "15"); err == nil {
 			t.Fatalf("Target(%q, %q) succeeded, want Compose-address rejection", address, "15")
 		}
@@ -37,6 +37,11 @@ func TestTargetRequiresComposeAddressAndDedicatedDatabase(t *testing.T) {
 	if target.Address != "redis:6379" || target.Database != 15 {
 		t.Fatalf("target = %#v, want Compose redis DB 15", target)
 	}
+	for _, address := range []string{"127.0.0.1:6379", "localhost:6379"} {
+		if _, err := Target(address, "15"); err != nil {
+			t.Fatalf("dedicated native Redis target rejected: %v", err)
+		}
+	}
 }
 
 func TestTargetExplainsTheIsolationContract(t *testing.T) {
@@ -47,7 +52,7 @@ func TestTargetExplainsTheIsolationContract(t *testing.T) {
 	if !strings.Contains(err.Error(), "1 through 15") {
 		t.Fatalf("Target error = %q, want Redis database isolation contract", err)
 	}
-	_, err = Target("127.0.0.1:6379", "15")
+	_, err = Target("10.0.0.1:6379", "15")
 	if err == nil || !strings.Contains(err.Error(), "redis:6379") {
 		t.Fatalf("Target error = %q, want Compose Redis address contract", err)
 	}

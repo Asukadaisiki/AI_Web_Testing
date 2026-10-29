@@ -1,0 +1,35 @@
+diff --git a/web/src/components/layouts/routes.tsx b/web/src/components/layouts/routes.tsx
+index 6b564c8..99a2dad 100644
+--- a/web/src/components/layouts/routes.tsx
++++ b/web/src/components/layouts/routes.tsx
+@@ -123,7 +123,7 @@ export const ROUTES: Route[] = [
+     pathname: `/project/[projectId]/sessions`,
+   },
+   {
+-    title: "Browser tasks",
++    title: "Agent runs",
+     pathname: "/project/[projectId]/browser-runs",
+     icon: MonitorSmartphone,
+     group: RouteGroup.Observability,
+diff --git a/web/src/env.mjs b/web/src/env.mjs
+index a46d0fd..c7f0e0d 100644
+--- a/web/src/env.mjs
++++ b/web/src/env.mjs
+@@ -50,7 +50,7 @@ export const env = createEnv({
+     AGENTTRACE_BRIDGE_TOKEN: z.string().optional(),
+     AGENTTRACE_LANGFUSE_PROJECT_ID: z.string().optional(),
+     AGENTTRACE_PROJECT_ID: z.string().optional(),
+-    AGENTTRACE_CONVERSATION_ID: z.string().optional(),
++    AGENTTRACE_PROJECT_BINDINGS: z.string().optional(),
+     NEXTAUTH_SECRET:
+       process.env.NODE_ENV === "production"
+         ? z.string().min(1)
+@@ -570,7 +570,7 @@ export const env = createEnv({
+     AGENTTRACE_LANGFUSE_PROJECT_ID:
+       process.env.AGENTTRACE_LANGFUSE_PROJECT_ID,
+     AGENTTRACE_PROJECT_ID: process.env.AGENTTRACE_PROJECT_ID,
+-    AGENTTRACE_CONVERSATION_ID: process.env.AGENTTRACE_CONVERSATION_ID,
++    AGENTTRACE_PROJECT_BINDINGS: process.env.AGENTTRACE_PROJECT_BINDINGS,
+     NEXT_PUBLIC_DEMO_PROJECT_ID: process.env.NEXT_PUBLIC_DEMO_PROJECT_ID,
+     NEXT_PUBLIC_DEMO_ORG_ID: process.env.NEXT_PUBLIC_DEMO_ORG_ID,
+     DATABASE_URL: process.env.DATABASE_URL,

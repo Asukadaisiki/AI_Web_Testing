@@ -15,6 +15,9 @@ import type {
   Locator,
   Observation,
 } from "../src/browser/contract.js";
+import { validateCase } from "../src/browser/contract.js";
+import { validateBrowserEventPayload } from "../src/browser-protocol.js";
+import { encodeToolOutcome } from "../src/mcp/tool-result.js";
 
 const LIST_URL = "https://shop.test/products";
 const DETAIL_URL = "https://shop.test/item/1";
@@ -548,5 +551,141 @@ describe("CaseBuilder transactional authoring", () => {
     expect(finished.result.ok).toBe(false);
     expect(finished.case?.steps).toHaveLength(1);
     expect(finished.dryRun?.status).toBe("failed");
+  });
+
+  it.each(["password-case-canary-7429", "input", "value", "https"])("keeps password %s execution private while returning valid redacted case evidence", async (canary) => {
+    const observed = listObservation();
+    observed.elements[0]!.attributes = { type: "PASSWORD" };
+    const requests: ActRequest[] = [];
+    let executed: Case | undefined;
+    const server = startServer((req, res, body) => {
+      if (req.url === "/sessions") return jsonResponse(res, 200, { session_id: "password" });
+      if (req.url?.endsWith("/navigate")) return jsonResponse(res, 200, observed);
+      if (req.url?.endsWith("/act")) {
+        requests.push(body as ActRequest);
+        return jsonResponse(res, 200, passingActResponse(observed));
+      }
+      if (req.url === "/execute") {
+        executed = (body as { case: Case }).case;
+        return jsonResponse(res, 200, {
+          execution_id: "password-execution", status: "passed",
+          started_at: "2026-10-28T00:00:00Z", finished_at: "2026-10-28T00:00:01Z",
+          final_url: LIST_URL, error: null,
+          steps: executed.steps.map((step) => ({
+            index: step.index, action: step.action, status: "passed",
+            started_at: "2026-10-28T00:00:00Z", duration_ms: 1,
+            url_before: LIST_URL, url_after: LIST_URL, error: null,
+            conditions: step.postconditions.map((condition) => ({
+              phase: "post", type: condition.type, value: condition.value,
+              satisfied: true, detail: null,
+            })),
+            evidence: { screenshot_path: null, console: [{ level: "log", text: canary }], network: [] },
+          })),
+        });
+      }
+      jsonResponse(res, 500, { error: "unexpected" });
+    });
+    servers.push(server);
+    const builder = await makeBuilder(server.url);
+    await builder.call("open_page", { url: LIST_URL, intent: "open login" });
+    const typed = await builder.call("input", {
+      hint: "Search", value: canary, expect_value: canary, intent: `enter ${canary}`,
+    });
+    expect(typed.result.ok).toBe(true);
+    expect(requests[0]?.value).toBe(canary);
+    expect(requests[0]?.postconditions[0]?.value).toBe(canary);
+    expect(typed.result.steps?.[1]?.value).toBe("[redacted]");
+    expect(typed.result.steps?.[1]?.postconditions).toEqual(["value_equals:[redacted]"]);
+    if (canary === "password-case-canary-7429") {
+      expect(JSON.stringify(encodeToolOutcome(typed))).not.toContain(canary);
+      expect(JSON.stringify(builder.committedSteps)).not.toContain(canary);
+    }
+    const finished = await builder.call("finish_case", { name: "password case" });
+    expect(executed?.steps[1]?.value).toBe(canary);
+    expect(finished.result.ok).toBe(true);
+    expect(finished.case?.steps[1]?.value).toBe("[redacted]");
+    expect(finished.case?.steps[1]?.postconditions[0]?.value).toBe("[redacted]");
+    if (canary === "password-case-canary-7429") {
+      expect(JSON.stringify(encodeToolOutcome(finished))).not.toContain(canary);
+    }
+    expect(() => validateCase(finished.case)).not.toThrow();
+    expect(() => validateBrowserEventPayload("browser.case.completed", {
+      verdict: "passed", case: finished.case, dry_run: finished.dryRun,
+    })).not.toThrow();
+  });
+
+  it("redacts rejected password expectations and errors without hiding normal input values", async () => {
+    const secret = "rejected-password-canary";
+    const wrong = "wrong-password-expectation";
+    const observed = listObservation();
+    observed.elements.push({
+      ...observed.elements[0]!, ref: "password", name: "Password",
+      attributes: { type: "password" }, locators: [roleLocator("textbox", "Password")],
+    });
+    const server = startServer((req, res, body) => {
+      if (req.url === "/sessions") return jsonResponse(res, 200, { session_id: "password" });
+      if (req.url?.endsWith("/navigate")) return jsonResponse(res, 200, observed);
+      if (req.method === "DELETE") return jsonResponse(res, 200, { closed: true });
+      if (req.url?.endsWith("/act")) {
+        if ((body as ActRequest).value === secret) return jsonResponse(res, 200, {
+          status: "failed", observation: observed, conditions: [],
+          error: { kind: "condition_unmet", message: `expected ${wrong}, got ${secret}` },
+        });
+        return jsonResponse(res, 200, passingActResponse(observed));
+      }
+      jsonResponse(res, 500, { error: "unexpected" });
+    });
+    servers.push(server);
+    const builder = await makeBuilder(server.url);
+    await builder.call("open_page", { url: LIST_URL, intent: "open" });
+    const normal = await builder.call("input", {
+      hint: "Search", value: "public-search", expect_value: "public-search", intent: "search",
+    });
+    expect(normal.result.steps?.[1]?.value).toBe("public-search");
+    const failed = await builder.call("input", {
+      hint: "Password", value: secret, expect_value: wrong, intent: "enter password",
+    });
+    expect(failed.result.ok).toBe(false);
+    expect(JSON.stringify(encodeToolOutcome(failed))).not.toContain(secret);
+    expect(JSON.stringify(encodeToolOutcome(failed))).not.toContain(wrong);
+    expect(builder.committedSteps).toHaveLength(2);
+    const attribute = await builder.call("assert_attribute", {
+      hint: "Password", expect_attribute: "value=private-attribute-canary", intent: "read password",
+    });
+    expect(attribute.result.ok).toBe(false);
+    expect(attribute.result.error).toBe("secret_assertion_disallowed");
+    expect(JSON.stringify(encodeToolOutcome(attribute))).not.toContain("private-attribute-canary");
+    expect(builder.committedSteps).toHaveLength(2);
+  });
+
+  it("fatal password repair failures retain value-free transcript markers", async () => {
+    const canary = "fatal-password-canary";
+    const observed = listObservation();
+    observed.elements[0]!.attributes = { type: "password" };
+    let navigated = false;
+    const server = startServer((req, res) => {
+      if (req.url === "/sessions") return jsonResponse(res, 200, { session_id: "password" });
+      if (req.url?.endsWith("/navigate")) {
+        if (navigated) return jsonResponse(res, 400, { error: "worker_error", detail: canary });
+        navigated = true;
+        return jsonResponse(res, 200, observed);
+      }
+      if (req.method === "DELETE") return jsonResponse(res, 200, { closed: true });
+      if (req.url?.endsWith("/act")) return jsonResponse(res, 200, {
+        status: "failed", observation: observed, conditions: [],
+        error: { kind: "action_failed", message: canary },
+      });
+      jsonResponse(res, 500, { error: "unexpected" });
+    });
+    servers.push(server);
+    const builder = await makeBuilder(server.url);
+    await builder.call("open_page", { url: LIST_URL, intent: "open" });
+    await expect(builder.call("input", {
+      hint: "Search", value: canary, expect_value: canary, intent: "enter password",
+    })).rejects.toMatchObject({
+      code: "committed_prefix_replay_failed",
+      message: expect.not.stringContaining(canary),
+      result: expect.objectContaining({ redacted_args: ["value", "expect_value"] }),
+    });
   });
 });

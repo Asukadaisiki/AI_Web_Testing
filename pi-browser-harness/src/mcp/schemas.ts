@@ -29,7 +29,7 @@ export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
  * Optional postcondition knobs shared by every target-bearing tool.
  * Ported from `v2:backend/internal/planner/tools.go`.
  */
-const expectProperties: z.ZodRawShape = {
+const expectProperties: Record<string, z.ZodType> = {
   expect_text: z
     .string()
     .describe("text that must become visible after the action")
@@ -63,8 +63,8 @@ const expectProperties: z.ZodRawShape = {
 };
 
 /** Returns the shared optional expect_* knobs, omitting `excluded` keys. */
-function optionalExpects(excluded: readonly string[]): z.ZodRawShape {
-  const result: z.ZodRawShape = {};
+function optionalExpects(excluded: readonly string[]): Record<string, z.ZodType> {
+  const result: Record<string, z.ZodType> = {};
   for (const [key, value] of Object.entries(expectProperties)) {
     if (!excluded.includes(key)) {
       result[key] = value;
@@ -126,7 +126,7 @@ function candidateIdSchema(action: string, assertion: boolean) {
 export interface BrowserToolSchema {
   name: BrowserToolName;
   description: string;
-  inputSchema: z.ZodRawShape;
+  inputSchema: Record<string, z.ZodType>;
 }
 
 const ACTION_TOOLS: BrowserToolSchema[] = [

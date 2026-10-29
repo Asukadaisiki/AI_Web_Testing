@@ -16,8 +16,9 @@ import {
   BROWSER_TOOL_SCHEMAS,
   type BrowserToolName,
 } from "../src/mcp/schemas.js";
-import { createBrowserSession } from "../src/pi-session.js";
+import { createBrowserSession, createPiSession } from "../src/pi-session.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
+import { SessionCleanupError } from "../src/server.js";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const TYPESCRIPT_COMPILER_PATH = fileURLToPath(
@@ -62,6 +63,11 @@ interface FakeSession {
   bindExtensions: ReturnType<typeof vi.fn>;
   subscribe: ReturnType<typeof vi.fn>;
   getActiveToolNames: ReturnType<typeof vi.fn>;
+  getToolDefinition: ReturnType<typeof vi.fn>;
+  extensionRunner: {
+    createToolContext: ReturnType<typeof vi.fn>;
+    getToolDefinition: ReturnType<typeof vi.fn>;
+  };
 }
 
 function makeFakeSession(activeTools: string[] = []): FakeSession {
@@ -72,6 +78,15 @@ function makeFakeSession(activeTools: string[] = []): FakeSession {
     bindExtensions: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn(() => () => {}),
     getActiveToolNames: vi.fn(() => activeTools),
+    getToolDefinition: vi.fn(() => ({
+      async execute() { return { structuredContent: { structuredContent: { closed: true } } }; },
+    })),
+    extensionRunner: {
+      createToolContext: vi.fn(() => ({})),
+      getToolDefinition: vi.fn(() => ({
+        async execute() { return { structuredContent: { structuredContent: { closed: true } } }; },
+      })),
+    },
   };
 }
 
@@ -183,6 +198,165 @@ function expectMcpToolArguments(
 }
 
 describe("createBrowserSession", () => {
+  it.each(["model-context-password-canary", "input", "value", "passed"])("sanitizes known password %s tool arguments before model invocation and event capture", async (secret) => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const provider = vi.fn(() => ({} as never));
+    runtime.streamSimple = provider;
+    const fake = makeFakeSession();
+    const { writer, chunks } = makeWriter();
+    const session = await createBrowserSession(baseRequest, {
+      modelRuntime: runtime, eventWriter: writer,
+      createAgentSession: async () => ({
+        session: { ...fake, extensionRunner: { ...fake.extensionRunner, async emit() {} } } as never,
+        extensionsResult: {} as never,
+      }),
+    });
+    try {
+      const emit = fake.subscribe.mock.calls[0]![0] as (event: unknown) => void;
+      const expected = "model-context-password-expectation";
+      const args = { value: secret, expect_value: expected, hint: "Password", intent: "sign in" };
+      emit({
+        type: "tool_execution_start", toolCallId: "password-1",
+        toolName: "mcp__browser_harness__input", args,
+      });
+      emit({
+        type: "tool_execution_end", toolCallId: "password-1",
+        toolName: "mcp__browser_harness__input", args, isError: false,
+        result: { content: [], structuredContent: { ok: true, redacted_args: ["value", "expect_value"] } },
+      });
+      const context = {
+        messages: [
+          { role: "user", content: "Canonical user goal", timestamp: 1 },
+          { role: "assistant", content: [
+            { type: "toolCall", id: "password-1", name: "mcp__browser_harness__input", arguments: args },
+            { type: "toolCall", id: "normal-1", name: "mcp__browser_harness__input",
+              arguments: { value: "public-search", expect_value: "public-search" } },
+          ], timestamp: 2 },
+          { role: "toolResult", toolCallId: "password-1", toolName: "mcp__browser_harness__input",
+            content: [{ type: "text", text: `old observation ${secret}` }], timestamp: 3 },
+        ],
+      };
+      runtime.streamSimple(runtime.getModel("scripted", "browser-fixture")!, context as never);
+      if (secret === "model-context-password-canary") {
+        expect(JSON.stringify(provider.mock.calls[0])).not.toContain(secret);
+      }
+      expect(JSON.stringify(provider.mock.calls[0])).not.toContain(expected);
+      expect(JSON.stringify(provider.mock.calls[0])).toContain("public-search");
+      expect(provider.mock.calls[0]).toEqual(expect.arrayContaining([
+        expect.objectContaining({ messages: expect.arrayContaining([
+          expect.objectContaining({ role: "assistant", content: expect.arrayContaining([
+            expect.objectContaining({ name: "mcp__browser_harness__input", arguments: {
+              value: "[redacted]", expect_value: "[redacted]", hint: "Password", intent: "sign in",
+            } }),
+          ]) }),
+        ]) }),
+      ]));
+      expect(context.messages[1]!.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({ arguments: args }),
+      ]));
+      emit({
+        type: "message_end", message: {
+          role: "assistant", content: [{ type: "text", text: `echo ${secret}` }],
+          provider: "scripted", model: "browser-fixture", stopReason: "stop", timestamp: 4,
+        },
+      });
+      if (secret === "model-context-password-canary") expect(chunks.join("")).not.toContain(secret);
+      expect(chunks.join("")).not.toContain(expected);
+      emit({ type: "agent_settled", aborted: false });
+      expect(chunks.join("")).toContain("public-search");
+      expect(chunks.join("")).toContain("Canonical user goal");
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("reports failed initialization cleanup as a fatal lifecycle error", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    fake.bindExtensions.mockRejectedValue(new Error("bind failed"));
+    await expect(createBrowserSession(baseRequest, {
+      modelRuntime: runtime, eventWriter: writer,
+      createAgentSession: async () => ({
+        session: {
+          ...fake,
+          extensionRunner: { ...fake.extensionRunner, async emit() { throw new Error("shutdown failed"); } },
+        } as never,
+        extensionsResult: {} as never,
+      }),
+    })).rejects.toBeInstanceOf(SessionCleanupError);
+    expect(fake.dispose).toHaveBeenCalledTimes(1);
+  });
+  it("closes a bound session if the selected mapper cannot initialize", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    const order: string[] = [];
+    fake.dispose.mockImplementation(() => { order.push("dispose"); });
+    await expect(createPiSession(baseRequest, {
+      modelRuntime: runtime, eventWriter: writer,
+      createAgentSession: async () => ({
+        session: { ...fake, extensionRunner: { async emit() { order.push("shutdown"); } } } as never,
+        extensionsResult: {} as never,
+      }),
+    }, {
+      systemPrompt: "", skillPaths: [], toolAllowlist: [], mcpServers: [],
+      completionPolicy: () => ({ verdict: "succeeded" }),
+      createEventMapper() { throw new Error("mapper initialization failed"); },
+    })).rejects.toThrow("mapper initialization failed");
+    expect(order).toEqual(["shutdown", "dispose"]);
+  });
+  it("closes a session before rejecting failed extension initialization", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    const order: string[] = [];
+    let finishShutdown!: () => void;
+    const shutdown = new Promise<void>((resolve) => { finishShutdown = resolve; });
+    fake.bindExtensions.mockRejectedValue(new Error("bind failed"));
+    const withShutdown = {
+      ...fake,
+      extensionRunner: {
+        ...fake.extensionRunner,
+        async emit() { order.push("shutdown"); await shutdown; },
+      },
+    };
+    fake.dispose.mockImplementation(() => order.push("dispose"));
+    const creating = createBrowserSession(baseRequest, {
+      modelRuntime: runtime, eventWriter: writer,
+      createAgentSession: async () => ({ session: withShutdown as never, extensionsResult: {} as never }),
+    });
+    void creating.catch(() => {});
+    await vi.waitFor(() => expect(order).toEqual(["shutdown"]));
+    finishShutdown();
+    await expect(creating).rejects.toThrow("bind failed");
+    expect(order).toEqual(["shutdown", "dispose"]);
+  });
+
+  it("aborts and awaits cleanup when cancelled during extension binding", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    const controller = new AbortController();
+    const order: string[] = [];
+    let finishBinding!: () => void;
+    const binding = new Promise<void>((resolve) => { finishBinding = resolve; });
+    fake.bindExtensions.mockImplementation(async () => { order.push("bind"); await binding; });
+    fake.abort.mockImplementation(async () => { order.push("abort"); finishBinding(); });
+    fake.dispose.mockImplementation(() => { order.push("dispose"); });
+    const creating = createBrowserSession(baseRequest, {
+      modelRuntime: runtime, eventWriter: writer, signal: controller.signal,
+      createAgentSession: async () => ({
+        session: { ...fake, extensionRunner: { async emit() { order.push("shutdown"); } } } as never,
+        extensionsResult: {} as never,
+      }),
+    });
+    void creating.catch(() => {});
+    await vi.waitFor(() => expect(order).toEqual(["bind"]));
+    controller.abort();
+    await expect(creating).rejects.toThrow();
+    expect(order).toEqual(["bind", "abort", "shutdown", "dispose"]);
+  });
   it("reloads the selected resource loader before creating the agent session", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();

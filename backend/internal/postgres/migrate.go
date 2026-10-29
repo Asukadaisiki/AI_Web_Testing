@@ -36,15 +36,45 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
+		if entry.Name() > "008_harness_catalog.sql" {
+			if err := applyMigration(ctx, pool, "008_harness_catalog.sql"); err != nil {
+				return err
+			}
+		}
 		if err := applyMigration(ctx, pool, entry.Name()); err != nil {
 			return err
 		}
 	}
+	if err := applyMigration(ctx, pool, "008_harness_catalog.sql"); err != nil {
+		return err
+	}
 	return nil
 }
 
+// Kept in Go to preserve the backend-only ownership boundary for composition.
+const harnessCatalogMigration = `
+CREATE TABLE harnesses (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+	revision INTEGER NOT NULL CHECK (revision > 0),
+	snapshot JSONB NOT NULL CHECK (jsonb_typeof(snapshot) = 'object'),
+	CHECK (snapshot ->> 'id' = id),
+	CHECK (snapshot ->> 'name' = name),
+	CHECK ((snapshot ->> 'revision')::integer = revision),
+	CHECK (jsonb_typeof(snapshot -> 'skills') = 'array'),
+	CHECK (jsonb_typeof(snapshot -> 'mcp') = 'object')
+);
+CREATE TABLE harness_seeds (id TEXT PRIMARY KEY);
+`
+
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version string) error {
-	sql, err := migrationFiles.ReadFile("migrations/" + version)
+	var sql []byte
+	var err error
+	if version == "008_harness_catalog.sql" {
+		sql = []byte(harnessCatalogMigration)
+	} else {
+		sql, err = migrationFiles.ReadFile("migrations/" + version)
+	}
 	if err != nil {
 		return fmt.Errorf("read migration %s: %w", version, err)
 	}

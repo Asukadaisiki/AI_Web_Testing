@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 )
 
 // ProtocolVersion is the exact protocol identifier this package speaks.
@@ -29,19 +30,27 @@ type ModelRequest struct {
 
 // Request is the single JSON object written to the harness stdin.
 type Request struct {
-	ProtocolVersion string       `json:"protocol_version"`
-	RunID           string       `json:"run_id"`
-	AttemptID       string       `json:"attempt_id"`
-	Goal            string       `json:"goal"`
-	Model           ModelRequest `json:"model"`
-	WorkerURL       string       `json:"worker_url"`
-	ArtifactScope   string       `json:"artifact_scope"`
+	ProtocolVersion   string          `json:"protocol_version"`
+	RunID             string          `json:"run_id"`
+	AttemptID         string          `json:"attempt_id"`
+	Goal              string          `json:"goal"`
+	Model             ModelRequest    `json:"model"`
+	WorkerURL         string          `json:"worker_url,omitempty"`
+	ArtifactScope     string          `json:"artifact_scope,omitempty"`
+	Execution         *execution.Spec `json:"execution,omitempty"`
+	ProjectID         string          `json:"project_id,omitempty"`
+	EnvironmentID     string          `json:"environment_id,omitempty"`
+	ProfileGeneration int64           `json:"profile_generation,omitempty"`
+	FencingToken      int64           `json:"fencing_token,omitempty"`
 }
 
 // MarshalJSON serializes the request. It enforces the protocol version constant
 // so callers cannot accidentally ship a different version.
 func (r Request) MarshalJSON() ([]byte, error) {
 	type alias Request
+	if err := r.validateEnvironmentLease(); err != nil {
+		return nil, err
+	}
 	if r.ProtocolVersion == "" {
 		r.ProtocolVersion = ProtocolVersion
 	}
@@ -59,6 +68,20 @@ func (r *Request) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("piharness: unsupported protocol version %q", decoded.ProtocolVersion)
 	}
 	*r = Request(decoded)
+	if err := r.validateEnvironmentLease(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r Request) validateEnvironmentLease() error {
+	if r.ProjectID == "" && r.EnvironmentID == "" && r.ProfileGeneration == 0 && r.FencingToken == 0 {
+		return nil
+	}
+	if strings.TrimSpace(r.ProjectID) == "" || strings.TrimSpace(r.EnvironmentID) == "" ||
+		r.ProfileGeneration < 1 || r.ProfileGeneration > 9007199254740991 || r.FencingToken < 1 || r.FencingToken > 9007199254740991 {
+		return errors.New("piharness: complete managed environment lease identity is required")
+	}
 	return nil
 }
 
@@ -122,12 +145,24 @@ func (e Event) TimestampTime() time.Time {
 type StartedPayload struct{}
 
 type MessageCompletedPayload struct {
-	Text string `json:"text"`
+	Text     string `json:"text"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	// Input is the model transcript (messages plus optional systemPrompt/tools),
+	// captured after Pi transformations. Timing is an optional UTC pair.
+	Input     json.RawMessage `json:"input,omitempty"`
+	StartedAt string          `json:"started_at,omitempty"`
+	EndedAt   string          `json:"ended_at,omitempty"`
 }
 
 type UsagePayload struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  *int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	TotalTokens      *int64 `json:"total_tokens,omitempty"`
 }
 
 type ToolStartedPayload struct {
@@ -155,6 +190,8 @@ type CaseCompletedPayload struct {
 
 type SettledPayload struct {
 	AssistantText string `json:"assistant_text"`
+	// Verdict belongs to the selected Harness policy, not the transport or observer.
+	Verdict string `json:"verdict"`
 }
 
 type FailedPayload struct {
@@ -248,16 +285,79 @@ func validateEventPayload(ev Event) error {
 		return fmt.Errorf("%w for %s: %v", ErrInvalidPayload, ev.Type, err)
 	}
 
+	if ev.Type == EventMessageCompleted || ev.Type == EventUsage {
+		for _, field := range []string{"provider", "model"} {
+			if _, present := payload[field]; present {
+				if err := requireNonBlankString(payload, field); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	switch ev.Type {
 	case EventStarted:
 		return validateExactKeys(payload, nil)
 	case EventMessageCompleted:
+		_, hasStart := payload["started_at"]
+		_, hasEnd := payload["ended_at"]
+		if hasStart != hasEnd {
+			return errors.New("started_at and ended_at must be supplied together")
+		}
+		if hasStart {
+			start, err := requiredTimestamp(payload, "started_at")
+			if err != nil {
+				return err
+			}
+			end, err := requiredTimestamp(payload, "ended_at")
+			if err != nil {
+				return err
+			}
+			if end.Before(start) {
+				return errors.New("ended_at must not precede started_at")
+			}
+			_, startOffset := start.Zone()
+			_, endOffset := end.Zone()
+			if startOffset != 0 || endOffset != 0 {
+				return errors.New("model timing must be UTC")
+			}
+		}
+		if raw, present := payload["input"]; present {
+			input, err := objectPayload(raw)
+			if err != nil {
+				return fmt.Errorf("input: %w", err)
+			}
+			messages, present := input["messages"]
+			if !present || len(bytes.TrimSpace(messages)) == 0 || bytes.TrimSpace(messages)[0] != '[' {
+				return errors.New("input.messages must be an array")
+			}
+			if _, present := input["systemPrompt"]; present {
+				if err := requireString(input, "systemPrompt"); err != nil {
+					return err
+				}
+			}
+			if tools, present := input["tools"]; present {
+				if len(bytes.TrimSpace(tools)) == 0 || bytes.TrimSpace(tools)[0] != '[' {
+					return errors.New("input.tools must be an array")
+				}
+			}
+		}
 		return requireString(payload, "text")
 	case EventUsage:
 		if err := requireNonNegativeInt(payload, "input_tokens"); err != nil {
 			return err
 		}
-		return requireNonNegativeInt(payload, "output_tokens")
+		if err := requireNonNegativeInt(payload, "output_tokens"); err != nil {
+			return err
+		}
+		for _, key := range []string{"cache_read_tokens", "cache_write_tokens", "total_tokens"} {
+			if _, present := payload[key]; present {
+				if err := requireNonNegativeInt(payload, key); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case EventToolStarted:
 		if err := requireString(payload, "tool_call_id"); err != nil {
 			return err
@@ -287,6 +387,14 @@ func validateEventPayload(ev Event) error {
 	case EventCaseCompleted:
 		return validateCaseCompletion(payload)
 	case EventSettled:
+		if raw, present := payload["verdict"]; present {
+			var verdict string
+			if err := json.Unmarshal(raw, &verdict); err != nil || (verdict != "succeeded" && verdict != "failed") {
+				return errors.New("verdict must be succeeded or failed")
+			}
+		} else {
+			return errors.New("verdict is required")
+		}
 		return requireString(payload, "assistant_text")
 	case EventFailed:
 		return requireString(payload, "error")

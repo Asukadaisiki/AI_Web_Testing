@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   HarnessEventWriter,
-  deriveTerminalVerdict,
   parseRunRequest,
   type HarnessEventPayloads,
 } from "../src/run-protocol.js";
+import { deriveTerminalVerdict, validateBrowserEventPayload } from "../src/browser-protocol.js";
 import type { Case, ExecutionResult } from "../src/browser/contract.js";
 
 const request = {
@@ -23,6 +23,18 @@ const request = {
   worker_url: "http://worker:8100",
   artifact_scope: "run_1",
 };
+
+it("accepts complete managed lease metadata and rejects partial or unsafe identities", () => {
+  const managed = { ...request, project_id: "p", environment_id: "env", profile_generation: 2, fencing_token: 4 };
+  expect(parseRunRequest(JSON.stringify(managed))).toMatchObject(managed);
+  for (const metadata of [
+    { environment_id: "env" },
+    { project_id: "p", environment_id: "env", profile_generation: 0, fencing_token: 4 },
+    { project_id: "p", environment_id: "env", profile_generation: 2, fencing_token: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    expect(() => parseRunRequest(JSON.stringify({ ...request, ...metadata }))).toThrow();
+  }
+});
 
 const browserCase = {
   case_version: "loop.case.v1",
@@ -69,8 +81,33 @@ const dryRun = {
 } satisfies ExecutionResult;
 
 describe("parseRunRequest", () => {
+  it("accepts requests without browser configuration", () => {
+    const { worker_url: _worker, artifact_scope: _scope, ...generic } = request;
+    expect(parseRunRequest(JSON.stringify(generic))).toEqual(generic);
+  });
+
   it("accepts the strict v1 request", () => {
     expect(parseRunRequest(JSON.stringify(request))).toEqual(request);
+  });
+
+  it.each(["pi", "claude-code", "codex"])("preserves the selected %s execution snapshot", (runtime_id) => {
+    const managed = {
+      ...request,
+      execution: {
+        runtime_id,
+        harness: {
+          id: "selected", name: "Selected", revision: 3,
+          system_prompt: "Follow this prompt", skills: [], mcp: {},
+        },
+      },
+    };
+    expect(parseRunRequest(JSON.stringify(managed))).toEqual(managed);
+  });
+
+  it("rejects unknown selected runtimes at the wire boundary", () => {
+    expect(() => parseRunRequest(JSON.stringify({
+      ...request, execution: { runtime_id: "unknown", harness: {} },
+    }))).toThrow();
   });
 
   it.each([
@@ -78,6 +115,8 @@ describe("parseRunRequest", () => {
     ["blank run IDs", { ...request, run_id: " " }],
     ["blank attempt IDs", { ...request, attempt_id: "" }],
     ["relative worker URLs", { ...request, worker_url: "/worker" }],
+    ["blank artifact scopes", { ...request, artifact_scope: " " }],
+    ["null worker URLs", { ...request, worker_url: null }],
     [
       "unsupported protocol versions",
       { ...request, protocol_version: "pi-browser-harness.v2" },
@@ -88,6 +127,29 @@ describe("parseRunRequest", () => {
 });
 
 describe("HarnessEventWriter", () => {
+  it.each([
+    ["pi.message.completed", { text: "done", started_at: "2026-10-28T00:00:00Z" }],
+    ["pi.message.completed", { text: "done", input: null }],
+    ["pi.message.completed", {
+      text: "done", started_at: "2026-10-28T00:00:02Z", ended_at: "2026-10-28T00:00:01Z",
+    }],
+    ["pi.usage", { input_tokens: 1, output_tokens: 2, cache_read_tokens: -1 }],
+    ["pi.message.completed", { text: "done", provider: null }],
+    ["pi.message.completed", { text: "done", model: " " }],
+    ["pi.usage", { input_tokens: 1, output_tokens: 2, provider: "" }],
+    ["pi.usage", { input_tokens: 1, output_tokens: 2, model: 123 }],
+  ] as const)("rejects malformed model metadata for %s", (type, payload) => {
+    const writer = new HarnessEventWriter(request, { write: () => true });
+    expect(() => writer.write(type, payload as never)).toThrow(`invalid ${type} payload`);
+  });
+
+  it("requires an explicit selected harness verdict", () => {
+    const writer = new HarnessEventWriter(request, { write: () => true });
+    expect(() => writer.write("harness.settled", { assistant_text: "done" } as never))
+      .toThrow("invalid harness.settled payload");
+    expect(writer.hasTerminalEvent).toBe(false);
+  });
+
   it("writes identified UTC records with monotonic sequences", () => {
     const chunks: string[] = [];
     const output = new Writable({
@@ -105,7 +167,7 @@ describe("HarnessEventWriter", () => {
 
     writer.write("harness.started", {});
     writer.write("pi.message.completed", { text: "cart verified" });
-    writer.write("harness.settled", { assistant_text: "cart verified" });
+    writer.write("harness.settled", { assistant_text: "cart verified", verdict: "succeeded" });
 
     const records = chunks
       .join("")
@@ -136,7 +198,7 @@ describe("HarnessEventWriter", () => {
         attempt_id: "attempt_1",
         sequence: 3,
         timestamp: "2026-10-26T12:34:56.789Z",
-        payload: { assistant_text: "cart verified" },
+        payload: { assistant_text: "cart verified", verdict: "succeeded" },
       },
     ]);
   });
@@ -158,7 +220,7 @@ describe("HarnessEventWriter", () => {
         case: browserCase,
         dry_run: dryRun,
       },
-      "harness.settled": { assistant_text: "done" },
+      "harness.settled": { assistant_text: "done", verdict: "succeeded" },
       "harness.failed": { error: "failed" },
     } satisfies HarnessEventPayloads;
 
@@ -175,20 +237,9 @@ describe("HarnessEventWriter", () => {
     ]);
   });
 
-  it("rejects malformed browser case evidence before writing it", () => {
-    const output = new Writable({
-      write(_chunk, _encoding, callback) {
-        callback();
-      },
-    });
-    const writer = new HarnessEventWriter(parseRunRequest(JSON.stringify(request)), output);
-
-    expect(() =>
-      writer.write(
-        "browser.case.completed",
-        { verdict: "passed" } as never,
-      ),
-    ).toThrow("invalid browser.case.completed payload");
+  it("validates browser case evidence at the browser boundary", () => {
+    expect(() => validateBrowserEventPayload("browser.case.completed", { verdict: "passed" }))
+      .toThrow("invalid browser.case.completed payload");
   });
 });
 

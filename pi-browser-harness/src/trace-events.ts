@@ -8,6 +8,7 @@ import {
   type ExecutionResult,
 } from "./browser/contract.js";
 import type { HarnessEventType, HarnessEventPayloads } from "./run-protocol.js";
+import { mapAssistantMessage } from "./pi-events.js";
 
 const BROWSER_HARNESS_TOOL_PREFIX = "mcp__browser_harness__";
 const FINISH_CASE_TOOL = `${BROWSER_HARNESS_TOOL_PREFIX}finish_case`;
@@ -19,23 +20,22 @@ const FINISH_CASE_TOOL = `${BROWSER_HARNESS_TOOL_PREFIX}finish_case`;
 export interface TraceMapperState {
   browser_case_verdicts: ("passed" | "failed")[];
   last_assistant_text: string;
-  /** Message ids whose usage has already been emitted. */
-  emitted_usage: Set<string>;
+  /** SDK message identities whose usage has already been emitted. */
+  emitted_usage: WeakSet<AssistantMessage>;
 }
 
 export function createTraceMapperState(): TraceMapperState {
   return {
     browser_case_verdicts: [],
     last_assistant_text: "",
-    emitted_usage: new Set(),
+    emitted_usage: new WeakSet(),
   };
 }
 
 /** A mapped harness event discriminant and its payload. */
-export interface MappedEvent<Type extends HarnessEventType = HarnessEventType> {
-  type: Type;
-  payload: HarnessEventPayloads[Type];
-}
+export type MappedEvent<Type extends HarnessEventType = HarnessEventType> = {
+  [EventType in Type]: { type: EventType; payload: HarnessEventPayloads[EventType] };
+}[Type];
 
 /**
  * Maps a single Pi agent-session event to zero or more harness events.
@@ -55,27 +55,9 @@ export function mapPiEvent(
       if (!isAssistantMessage(message)) {
         return [];
       }
-      const events: MappedEvent[] = [];
       const text = extractAssistantText(message);
       state.last_assistant_text = text;
-      events.push({
-        type: "pi.message.completed",
-        payload: { text },
-      });
-      if (message.usage !== undefined) {
-        const messageId = messageKey(message);
-        if (!state.emitted_usage.has(messageId)) {
-          state.emitted_usage.add(messageId);
-          events.push({
-            type: "pi.usage",
-            payload: {
-              input_tokens: message.usage.input,
-              output_tokens: message.usage.output,
-            },
-          });
-        }
-      }
-      return events;
+      return mapAssistantMessage(message, state.emitted_usage);
     }
 
     case "tool_execution_start": {
@@ -135,15 +117,6 @@ export function mapPiEvent(
       return events;
     }
 
-    case "agent_settled": {
-      return [
-        {
-          type: "harness.settled",
-          payload: { assistant_text: state.last_assistant_text },
-        },
-      ];
-    }
-
     default:
       return [];
   }
@@ -175,17 +148,6 @@ function isTextContent(item: unknown): item is TextContent {
     item !== null &&
     (item as { type?: string }).type === "text"
   );
-}
-
-function messageKey(message: AssistantMessage): string {
-  const content = message.content;
-  if (content.length > 0) {
-    const first = content[0];
-    if (first !== undefined && "text" in first && typeof first.text === "string") {
-      return first.text;
-    }
-  }
-  return String(message.timestamp);
 }
 
 /**
@@ -268,6 +230,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 interface HarnessStructuredContent {
+  [key: string]: unknown;
   page?: unknown;
   case?: unknown;
   dry_run?: unknown;

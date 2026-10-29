@@ -9,17 +9,21 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/jackc/pgx/v5"
 )
 
 // CreateMessageParams is the validated API request persisted as a user message and queued run.
 type CreateMessageParams struct {
-	ConversationID string
-	Content        string
-	AgentID        string
-	Model          event.ModelRef
-	Operations     []event.Operation
-	IdempotencyKey string
+	ConversationID   string
+	Content          string
+	AgentID          string
+	Model            event.ModelRef
+	Operations       []event.Operation
+	IdempotencyKey   string
+	Execution        *execution.Spec
+	RuntimeID        string
+	HarnessVersionID string
 }
 
 type createMessageResponse struct {
@@ -38,8 +42,9 @@ type createRerunResponse struct {
 }
 
 type runSpecification struct {
-	AgentID string           `json:"agent_id"`
-	Command event.RunCommand `json:"command"`
+	AgentID   string           `json:"agent_id"`
+	Command   event.RunCommand `json:"command"`
+	Execution *execution.Spec  `json:"execution,omitempty"`
 }
 
 // CreateMessageAndRun locks an existing conversation and atomically writes the message, run,
@@ -53,18 +58,28 @@ func (s *Store) CreateMessageAndRun(
 	if err := validateCreateMessageParams(p); err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
+	p.Execution = p.Execution.Clone()
+	if s.ManagementEnabled() && (p.Execution != nil || !execution.KnownRuntime(p.RuntimeID) || p.HarnessVersionID == "") {
+		return domain.Message{}, domain.Run{}, ErrConflict
+	}
 	requestHash, err := payloadHash(struct {
-		ConversationID string            `json:"conversation_id"`
-		Content        string            `json:"content"`
-		AgentID        string            `json:"agent_id"`
-		Model          event.ModelRef    `json:"model"`
-		Operations     []event.Operation `json:"operations"`
+		ConversationID   string            `json:"conversation_id"`
+		Content          string            `json:"content"`
+		AgentID          string            `json:"agent_id"`
+		Model            event.ModelRef    `json:"model"`
+		Operations       []event.Operation `json:"operations"`
+		Execution        *execution.Spec   `json:"execution,omitempty"`
+		RuntimeID        string            `json:"runtime_id,omitempty"`
+		HarnessVersionID string            `json:"harness_version_id,omitempty"`
 	}{
-		ConversationID: p.ConversationID,
-		Content:        p.Content,
-		AgentID:        p.AgentID,
-		Model:          p.Model,
-		Operations:     p.Operations,
+		ConversationID:   p.ConversationID,
+		Content:          p.Content,
+		AgentID:          p.AgentID,
+		Model:            p.Model,
+		Operations:       p.Operations,
+		Execution:        p.Execution,
+		RuntimeID:        p.RuntimeID,
+		HarnessVersionID: p.HarnessVersionID,
 	})
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
@@ -117,6 +132,17 @@ func (s *Store) CreateMessageAndRun(
 		return message, run, nil
 	}
 
+	environment, err := s.checkConversationRunnable(ctx, tx, p.ConversationID)
+	if err != nil {
+		return domain.Message{}, domain.Run{}, err
+	}
+	if s.ManagementEnabled() {
+		harness, err := resolveProjectHarnessTx(ctx, tx, projectID, p.HarnessVersionID, p.RuntimeID)
+		if err != nil {
+			return domain.Message{}, domain.Run{}, err
+		}
+		p.Execution = &execution.Spec{RuntimeID: p.RuntimeID, Harness: harness}
+	}
 	var ordinal int64
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(MAX(ordinal), 0) + 1
@@ -145,8 +171,12 @@ func (s *Store) CreateMessageAndRun(
 		Messages:          []domain.Message{message},
 		Operations:        append([]event.Operation(nil), p.Operations...),
 		CheckpointVersion: 0,
+		Execution:         p.Execution,
+		ProjectID:         projectID,
+		EnvironmentID:     environment.ID,
+		ProfileGeneration: environment.ProfileGeneration,
 	}
-	specification, err := json.Marshal(runSpecification{AgentID: p.AgentID, Command: command})
+	specification, err := json.Marshal(runSpecification{AgentID: p.AgentID, Command: command, Execution: p.Execution})
 	if err != nil {
 		return domain.Message{}, domain.Run{}, fmt.Errorf("marshal run specification: %w", err)
 	}
@@ -183,7 +213,11 @@ func (s *Store) CreateMessageAndRun(
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
-	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, run.ID, outboxEvent, outboxHash)
+	commandKey := run.ID
+	if environment.ID != "" {
+		commandKey = environment.ID
+	}
+	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, commandKey, outboxEvent, outboxHash)
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
@@ -197,6 +231,9 @@ func (s *Store) CreateMessageAndRun(
 }
 
 func validateCreateMessageParams(p CreateMessageParams) error {
+	if err := p.Execution.Validate(); err != nil {
+		return err
+	}
 	switch {
 	case strings.TrimSpace(p.ConversationID) == "":
 		return errors.New("conversation id is required")
@@ -346,8 +383,19 @@ func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Ru
 		return rerun, nil
 	}
 
+	environment, err := s.checkConversationRunnable(ctx, tx, conversationID)
+	if err != nil {
+		return domain.Run{}, err
+	}
 	specification.Command.RunID = rerunID
 	specification.Command.CheckpointVersion = 0
+	if environment.ID != "" {
+		specification.Command.ProjectID = projectID
+		specification.Command.EnvironmentID = environment.ID
+		specification.Command.ProfileGeneration = environment.ProfileGeneration
+		specification.Command.FencingToken = 0
+		specification.Command.WorkerURL = ""
+	}
 	specificationJSON, err := json.Marshal(specification)
 	if err != nil {
 		return domain.Run{}, fmt.Errorf("marshal rerun specification: %w", err)
@@ -380,7 +428,11 @@ func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Ru
 	if err != nil {
 		return domain.Run{}, err
 	}
-	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, rerun.ID, envelope, outboxHash)
+	commandKey := rerun.ID
+	if environment.ID != "" {
+		commandKey = environment.ID
+	}
+	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, commandKey, envelope, outboxHash)
 	if err != nil {
 		return domain.Run{}, err
 	}

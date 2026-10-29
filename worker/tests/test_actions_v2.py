@@ -112,11 +112,13 @@ class GenericActionV2Test(unittest.TestCase):
             )
             self.assertTrue(count_result.satisfied, count_result.detail)
 
-            with tempfile.NamedTemporaryFile() as handle:
-                handle.write(b"hello")
-                handle.flush()
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "avatar.txt").write_bytes(b"hello")
                 upload = page.get_by_label("Avatar")
-                await actions.upload_file_target(page, upload, handle.name, 2000)
+                await actions.upload_file_target(
+                    page, upload, "avatar.txt", 2000, upload_root=root
+                )
                 self.assertEqual(await upload.evaluate("el => el.files.length"), 1)
 
     def test_resolve_target_still_requires_unique_locator(self) -> None:

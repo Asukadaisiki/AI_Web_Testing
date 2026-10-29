@@ -1,0 +1,585 @@
+{
+  "checks": {
+    "generic-pi_sse_reconnect": "passed",
+    "generic-claude-code_sse_reconnect": "passed",
+    "generic-codex_sse_reconnect": "passed",
+    "browser-pi_sse_reconnect": "passed",
+    "browser-claude-code_sse_reconnect": "passed",
+    "negative-pi_sse_reconnect": "passed",
+    "cancel-pi_sse_reconnect": "passed",
+    "negative-claude-code_sse_reconnect": "passed",
+    "cancel-claude-code_sse_reconnect": "passed",
+    "browser-codex_sse_reconnect": "passed",
+    "six_real_sdk_combinations": "passed",
+    "generic_snapshot_after_edit_delete": "passed",
+    "negative-codex_sse_reconnect": "passed",
+    "cancel-codex_sse_reconnect": "passed",
+    "active_sdk_cancellation": "passed",
+    "rerun-pi_sse_reconnect": "passed",
+    "rerun-claude-code_sse_reconnect": "passed",
+    "rerun-codex_sse_reconnect": "passed",
+    "snapshot_after_edit_delete_rerun": "passed",
+    "optional_langfuse": "passed for all three SDKs"
+  },
+  "runs": {
+    "generic-pi": {
+      "run_id": "run_fdcf68f281e2797431e509c0db9ecbd4",
+      "runtime_id": "pi",
+      "harness_id": "har_bbbca134c0d925144b63c83dfbc0846a",
+      "harness_revision": 1,
+      "conversation_id": "conv_d0f4ad9c0ccdc34b24f6e4d53277e12c",
+      "status": "succeeded",
+      "model_spans": 1,
+      "usage_records": 1,
+      "total_tokens": 227,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "sse_events": 5
+    },
+    "browser-pi": {
+      "run_id": "run_bcae1bf8fef34932d4b62bac23a97283",
+      "runtime_id": "pi",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_ad3eba41295bc083cc99a907ae90d055",
+      "status": "succeeded",
+      "model_spans": 4,
+      "usage_records": 4,
+      "total_tokens": 34824,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "downloaded_screenshots": 4,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 20,
+      "langfuse_observations": 10
+    },
+    "generic-claude-code": {
+      "run_id": "run_48d6fb425afb87d94dbd3c775abaad56",
+      "runtime_id": "claude-code",
+      "harness_id": "har_bbbca134c0d925144b63c83dfbc0846a",
+      "harness_revision": 1,
+      "conversation_id": "conv_5abc112424b95bffd2995583d05ca663",
+      "status": "succeeded",
+      "model_spans": 2,
+      "usage_records": 1,
+      "total_tokens": 365,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "sse_events": 6
+    },
+    "browser-claude-code": {
+      "run_id": "run_4ede99802878a1d2a7e78e915a762010",
+      "runtime_id": "claude-code",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_dc4dc049c18a0da26f8f57d4f247404c",
+      "status": "succeeded",
+      "model_spans": 10,
+      "usage_records": 1,
+      "total_tokens": 22784,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "downloaded_screenshots": 4,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 23,
+      "langfuse_observations": 16,
+      "sdk_query_usage_scope_verified": true
+    },
+    "generic-codex": {
+      "run_id": "run_8e635b22dfac4fb43a45680b2597607c",
+      "runtime_id": "codex",
+      "harness_id": "har_bbbca134c0d925144b63c83dfbc0846a",
+      "harness_revision": 1,
+      "conversation_id": "conv_a0ff81560b01d8819537469c8d6c1a09",
+      "status": "succeeded",
+      "model_spans": 1,
+      "usage_records": 1,
+      "total_tokens": 1528,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "sse_events": 5
+    },
+    "browser-codex": {
+      "run_id": "run_3b39b543930527e95d8d5e086b79b0ad",
+      "runtime_id": "codex",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_15c65e4590aa3f68e9b3951dfd2ff332",
+      "previous_failed_runs": [
+        "run_7871ee00f5be65cfc572d7860ce324c7"
+      ],
+      "status": "succeeded",
+      "model_spans": 1,
+      "usage_records": 1,
+      "total_tokens": 42571,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "downloaded_screenshots": 4,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 14,
+      "langfuse_observations": 7
+    },
+    "negative-pi": {
+      "run_id": "run_22f0dbda942af480dfadac9e94bde158",
+      "runtime_id": "pi",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_01b75a6ba8985c5267cb2865a5be589f",
+      "status": "failed",
+      "model_spans": 3,
+      "usage_records": 3,
+      "total_tokens": 26513,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "sse_events": 15,
+      "browser_cleanup_acknowledgements": 1
+    },
+    "cancel-pi": {
+      "run_id": "run_9f669648912e6ef79f041fd0bc2b5152",
+      "runtime_id": "pi",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_db9814c51d496cbfe2c8f0fcca08cb7a",
+      "status": "cancelled",
+      "model_spans": 2,
+      "usage_records": 1,
+      "total_tokens": 8654,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 10
+    },
+    "negative-claude-code": {
+      "run_id": "run_46f166289d01b097342fe7e1e0946db1",
+      "runtime_id": "claude-code",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_efd845e8c4a160f1b8f55d23ba1d4360",
+      "status": "failed",
+      "model_spans": 8,
+      "usage_records": 1,
+      "total_tokens": 20077,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 18
+    },
+    "negative-codex": {
+      "run_id": "run_1bdde7a327d8174048f847089fb86297",
+      "runtime_id": "codex",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_b154f9dc4931958a65a0041cac3055f7",
+      "status": "failed",
+      "model_spans": 1,
+      "usage_records": 1,
+      "total_tokens": 30943,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 11
+    },
+    "cancel-claude-code": {
+      "run_id": "run_25975c5d12aa5d269b66aae1a6d199f2",
+      "runtime_id": "claude-code",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_9da3cc5a34bd3061d06a69fbec3b9d6b",
+      "status": "cancelled",
+      "model_spans": 3,
+      "usage_records": 0,
+      "total_tokens": 0,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 10
+    },
+    "cancel-codex": {
+      "run_id": "run_1a4a11455f078425fac20f47940a2a10",
+      "runtime_id": "codex",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_9696f9cc157d0c5c7e227c38c06693d4",
+      "status": "cancelled",
+      "model_spans": 1,
+      "usage_records": 0,
+      "total_tokens": 0,
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 8
+    },
+    "rerun-pi": {
+      "run_id": "run_dbacf04732649df3a82bcf622a3c7f0b",
+      "runtime_id": "pi",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_01b75a6ba8985c5267cb2865a5be589f",
+      "status": "failed",
+      "model_spans": 3,
+      "usage_records": 3,
+      "total_tokens": 26500,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "sse_events": 15,
+      "browser_cleanup_acknowledgements": 1
+    },
+    "rerun-claude-code": {
+      "run_id": "run_0c2446865a593d089a58e2d41f18b3bf",
+      "runtime_id": "claude-code",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_efd845e8c4a160f1b8f55d23ba1d4360",
+      "status": "failed",
+      "model_spans": 6,
+      "usage_records": 1,
+      "total_tokens": 29687,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 16
+    },
+    "rerun-codex": {
+      "run_id": "run_a1a28ccffd7ec677073dd7d6469c3865",
+      "runtime_id": "codex",
+      "harness_id": "har_4ba094d904343aef2a77347394987088",
+      "harness_revision": 1,
+      "conversation_id": "conv_b154f9dc4931958a65a0041cac3055f7",
+      "status": "failed",
+      "model_spans": 1,
+      "usage_records": 1,
+      "total_tokens": 30736,
+      "reported_models": [
+        "glm-5.3-flash"
+      ],
+      "durable_completed_events": 1,
+      "browser_sessions_remaining": 0,
+      "browser_cleanup_acknowledgements": 1,
+      "sse_events": 11
+    }
+  },
+  "runtime_sdks": {
+    "pi": "@earendil-works/pi-coding-agent@1.4.0",
+    "claude-code": "@anthropic-ai/claude-agent-sdk@0.3.311",
+    "codex": "@openai/codex-sdk@0.165.0"
+  },
+  "project_id": "prj_6ae7f1de2d558fdfbf9e0ce8e8c1323f",
+  "catalog": [
+    {
+      "id": "pi",
+      "name": "Pi",
+      "model": {
+        "provider": "openai-compatible",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "model": {
+        "provider": "anthropic-compatible",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "model": {
+        "provider": "openai-responses",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    }
+  ],
+  "status": "passed",
+  "prior_runs": {
+    "generic-claude-code": [
+      {
+        "run_id": "run_9f67fc6db1769bb25099029eda459ee5",
+        "runtime_id": "claude-code",
+        "harness_id": "har_bbbca134c0d925144b63c83dfbc0846a",
+        "harness_revision": 1,
+        "conversation_id": "conv_e8a123604fdff1c2c1ab9fcce57eec73",
+        "status": "succeeded",
+        "model_spans": 2,
+        "usage_records": 1,
+        "total_tokens": 361,
+        "reported_models": [
+          "glm-5.3-flash"
+        ],
+        "durable_completed_events": 1,
+        "browser_sessions_remaining": 0,
+        "sse_events": 6
+      },
+      {
+        "run_id": "run_7a872058d81376e0b467c7056f8758f1",
+        "runtime_id": "claude-code",
+        "harness_id": "har_bbbca134c0d925144b63c83dfbc0846a",
+        "harness_revision": 1,
+        "conversation_id": "conv_89e2758b27dcdfc9f95698801405ffe8"
+      }
+    ],
+    "browser-claude-code": [
+      {
+        "run_id": "run_bbb79fa97d5d358685197e1b2f3e6f75",
+        "runtime_id": "claude-code",
+        "harness_id": "har_4ba094d904343aef2a77347394987088",
+        "harness_revision": 1,
+        "conversation_id": "conv_2548fc4f840caefa6a81a02a4be27ef1",
+        "status": "succeeded",
+        "model_spans": 10,
+        "usage_records": 1,
+        "total_tokens": 41161,
+        "reported_models": [
+          "glm-5.3-flash"
+        ],
+        "downloaded_screenshots": 4,
+        "durable_completed_events": 1,
+        "browser_sessions_remaining": 0,
+        "browser_cleanup_acknowledgements": 1,
+        "sse_events": 23
+      },
+      {
+        "run_id": "run_c40cf0534ed57834d1518efb568416d5",
+        "runtime_id": "claude-code",
+        "harness_id": "har_4ba094d904343aef2a77347394987088",
+        "harness_revision": 1,
+        "conversation_id": "conv_b37f3ed964ac621b701c14b2a7193d5f"
+      }
+    ],
+    "negative-claude-code": [
+      {
+        "run_id": "run_db79bc5cbd63d006986f4a21c7ee341d",
+        "runtime_id": "claude-code",
+        "harness_id": "har_4ba094d904343aef2a77347394987088",
+        "harness_revision": 1,
+        "conversation_id": "conv_7a898edd3b226020d4ef5445a591eef2",
+        "status": "failed",
+        "model_spans": 6,
+        "usage_records": 1,
+        "total_tokens": 29690,
+        "reported_models": [
+          "glm-5.3-flash"
+        ],
+        "durable_completed_events": 1,
+        "browser_sessions_remaining": 0,
+        "sse_events": 16
+      }
+    ],
+    "cancel-claude-code": [
+      {
+        "run_id": "run_d3277fd93c4a96c409a401feaa76ddb1",
+        "runtime_id": "claude-code",
+        "harness_id": "har_4ba094d904343aef2a77347394987088",
+        "harness_revision": 1,
+        "conversation_id": "conv_f68bae9a3aae648fdd2a832bd1343ca2",
+        "status": "cancelled",
+        "model_spans": 2,
+        "usage_records": 0,
+        "total_tokens": 0,
+        "durable_completed_events": 1,
+        "browser_sessions_remaining": 0,
+        "browser_cleanup_acknowledgements": 1,
+        "sse_events": 9
+      }
+    ]
+  },
+  "date": "2026-10-28",
+  "final_build_acceptance": {
+    "checks": {
+      "final-pi-browser_sse_reconnect": "passed"
+    },
+    "runs": {
+      "final-pi-browser": {
+        "run_id": "run_1673695159bde1683a122878a7433cd7",
+        "runtime_id": "pi",
+        "harness_id": "har_d72c132a03077353466113d06154333d",
+        "harness_revision": 1,
+        "conversation_id": "conv_5eb183d334d98a9edcf1fd7b0546af21",
+        "status": "succeeded",
+        "model_spans": 4,
+        "usage_records": 4,
+        "total_tokens": 34798,
+        "reported_models": [
+          "glm-5.3-flash"
+        ],
+        "downloaded_screenshots": 4,
+        "durable_completed_events": 1,
+        "browser_sessions_remaining": 0,
+        "browser_cleanup_acknowledgements": 1,
+        "sse_events": 20
+      }
+    },
+    "runtime_sdks": {
+      "pi": "@earendil-works/pi-coding-agent@1.4.0",
+      "claude-code": "@anthropic-ai/claude-agent-sdk@0.3.311",
+      "codex": "@openai/codex-sdk@0.165.0"
+    },
+    "project_id": "prj_5502d2c24cbaafdd609a591bbac82987",
+    "core_langfuse_disabled": true,
+    "status": "passed"
+  },
+  "verification": {
+    "sdk_tests": {
+      "command": "npm test -- --run (pi-browser-harness)",
+      "passed": 422,
+      "skipped": 1,
+      "skip_reason": "opt-in live smoke; real provider covered by native SDK matrix"
+    },
+    "sdk_typecheck": "passed",
+    "sdk_build": "passed",
+    "go_tests": {
+      "command": "go test -p 1 ./...",
+      "status": "passed"
+    },
+    "postgres_runtime_export_integration": {
+      "status": "passed",
+      "database": "agenttrace_test_composition_coordinator",
+      "command": "go test -count=1 -p 1 ./internal/postgres ./internal/export/langfuse ./internal/runtime"
+    },
+    "shared_host_real_pi_race": {
+      "status": "passed",
+      "test": "TestSharedHostWithRealPiAndReplacementHarness"
+    },
+    "web_unit_tests": {
+      "passed": 89
+    },
+    "web_build": "passed",
+    "web_playwright": {
+      "passed": 8
+    },
+    "worker_tests": {
+      "passed": 98
+    },
+    "native_runner_and_composition_tests": {
+      "passed": 6
+    },
+    "acceptance_self_tests": {
+      "passed": 7
+    },
+    "langfuse_native_ownership_tests": {
+      "passed": 4
+    },
+    "git_diff_check": "passed"
+  },
+  "historical_run_states": [
+    {
+      "run_id": "run_7871ee00f5be65cfc572d7860ce324c7",
+      "status": "failed"
+    },
+    {
+      "run_id": "run_9f67fc6db1769bb25099029eda459ee5",
+      "status": "succeeded"
+    },
+    {
+      "run_id": "run_bbb79fa97d5d358685197e1b2f3e6f75",
+      "status": "succeeded"
+    },
+    {
+      "run_id": "run_db79bc5cbd63d006986f4a21c7ee341d",
+      "status": "failed"
+    },
+    {
+      "run_id": "run_c40cf0534ed57834d1518efb568416d5",
+      "status": "cancelled"
+    },
+    {
+      "run_id": "run_d3277fd93c4a96c409a401feaa76ddb1",
+      "status": "cancelled"
+    },
+    {
+      "run_id": "run_7a872058d81376e0b467c7056f8758f1",
+      "status": "cancelled"
+    }
+  ],
+  "final_core_health": {
+    "status": "ok",
+    "dependencies": {
+      "kafka": {
+        "status": "ok",
+        "required": false,
+        "pending_outbox": 0
+      },
+      "langfuse": {
+        "status": "disabled",
+        "required": false,
+        "pending_outbox": 0
+      },
+      "postgres": {
+        "status": "ok",
+        "required": true,
+        "pending_outbox": 0
+      },
+      "redis": {
+        "status": "ok",
+        "required": false,
+        "pending_outbox": 0
+      },
+      "worker": {
+        "status": "ok",
+        "required": false,
+        "pending_outbox": 0
+      }
+    }
+  },
+  "review": {
+    "status": "resolved",
+    "fixes": [
+      "Pi final SDK stopReason failure and transport onClose acknowledgement",
+      "Claude SDK process close join and cumulative query/model usage scope",
+      "Codex attempt-owned flat provider bridge, startup/close resource retention",
+      "Pi direct close initiates abort and joins prompt before MCP release"
+    ],
+    "scope_limit": "Direct children and MCP transports joined; arbitrary independently detached descendants not independently joined."
+  },
+  "provider_compatibility": {
+    "codex_tool_format": "flat-functions",
+    "default": "native",
+    "reason": "Tested GLM Responses endpoint ignores MCP namespace declarations",
+    "execution": "official Codex SDK and native CLI, actual MCP"
+  },
+  "audit_proxy": {
+    "port": 8112,
+    "purpose": "test-only Worker DELETE acknowledgement",
+    "normal_worker_port": 8110,
+    "stopped_after_acceptance": true
+  }
+}

@@ -25,6 +25,8 @@ const maxIngestionJSONDepth = 128
 
 const streamingJSONBufferBytes = 4 << 10
 
+const maxIngestionResponseBytes = 64 << 10
+
 // ErrRequestTooLarge is returned before HTTP when the encoded ingestion batch
 // exceeds the configured request boundary.
 var ErrRequestTooLarge = errors.New("Langfuse ingestion request exceeds maximum encoded size")
@@ -153,9 +155,102 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	if writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 		return fmt.Errorf("stream Langfuse ingestion batch: %w", writeErr)
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxIngestionResponseBytes))
 		return &HTTPError{StatusCode: response.StatusCode}
+	}
+	return validateIngestionResponse(response.Body, response.StatusCode, payload)
+}
+
+type ingestionResult struct {
+	ID      string          `json:"id"`
+	Status  int             `json:"status"`
+	Message string          `json:"message"`
+	Error   json.RawMessage `json:"error"`
+}
+
+type ingestionResponseError struct {
+	successes int
+	failures  []ingestionResult
+}
+
+func (e *ingestionResponseError) Error() string {
+	first := e.failures[0]
+	return fmt.Sprintf(
+		"Langfuse ingestion partially failed: %d successes, %d errors; event %.128s status %d: %.512s %.512s",
+		e.successes, len(e.failures), first.ID, first.Status, first.Message, first.Error,
+	)
+}
+
+func (e *ingestionResponseError) Permanent() bool {
+	for _, failure := range e.failures {
+		if failure.Status < http.StatusBadRequest || failure.Status >= http.StatusInternalServerError ||
+			IsTransient(&HTTPError{StatusCode: failure.Status}) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateIngestionResponse(body io.Reader, status int, request ingestionRequest) error {
+	raw, err := io.ReadAll(io.LimitReader(body, maxIngestionResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("read Langfuse ingestion response: %w", err)
+	}
+	if len(raw) > maxIngestionResponseBytes {
+		return errors.New("Langfuse ingestion response exceeds maximum size")
+	}
+	// Older ingestion endpoints and test servers return no per-event results.
+	// A 207 must always prove that the entire submitted batch was processed.
+	trimmed := strings.TrimSpace(string(raw))
+	if status != http.StatusMultiStatus && trimmed == "" {
+		return nil
+	}
+	var response struct {
+		Successes []ingestionResult `json:"successes"`
+		Errors    []ingestionResult `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return fmt.Errorf("decode Langfuse ingestion response: %w", err)
+	}
+	if response.Successes == nil || response.Errors == nil {
+		if status != http.StatusMultiStatus {
+			var object map[string]json.RawMessage
+			if json.Unmarshal(raw, &object) == nil && object != nil && len(object) == 0 {
+				return nil
+			}
+		}
+		return errors.New("Langfuse ingestion response is missing successes/errors arrays")
+	}
+	pending := make(map[string]bool, len(request.Batch))
+	for _, item := range request.Batch {
+		pending[item.ID] = true
+	}
+	acknowledge := func(id string) error {
+		if !pending[id] {
+			return errors.New("Langfuse ingestion response has an unknown or duplicate acknowledgement")
+		}
+		delete(pending, id)
+		return nil
+	}
+	for _, success := range response.Successes {
+		if success.Status < http.StatusOK || success.Status >= http.StatusMultipleChoices {
+			return errors.New("Langfuse ingestion response has an invalid success status")
+		}
+		if err := acknowledge(success.ID); err != nil {
+			return err
+		}
+	}
+	for _, failure := range response.Errors {
+		if err := acknowledge(failure.ID); err != nil {
+			return err
+		}
+	}
+	if len(pending) != 0 {
+		return errors.New("Langfuse ingestion response did not acknowledge every submitted event")
+	}
+	if len(response.Errors) != 0 {
+		return &ingestionResponseError{successes: len(response.Successes), failures: response.Errors}
 	}
 	return nil
 }
@@ -442,7 +537,9 @@ func writeObservationBody(writer ingestionJSONWriter, body observationBody) {
 	if len(body.Metadata) > 0 {
 		writeJSONField(writer, &first, "metadata", body.Metadata)
 	}
-	writeTimeField(writer, &first, "startTime", body.StartTime)
+	if body.StartTime != nil {
+		writeTimeField(writer, &first, "startTime", *body.StartTime)
+	}
 	if body.EndTime != nil {
 		writeTimeField(writer, &first, "endTime", *body.EndTime)
 	}
@@ -451,6 +548,15 @@ func writeObservationBody(writer ingestionJSONWriter, body observationBody) {
 	}
 	if body.StatusMessage != "" {
 		writeJSONField(writer, &first, "statusMessage", body.StatusMessage)
+	}
+	if body.Model != "" {
+		writeJSONField(writer, &first, "model", body.Model)
+	}
+	if len(body.UsageDetails) > 0 {
+		writeJSONField(writer, &first, "usageDetails", body.UsageDetails)
+	}
+	if len(body.CostDetails) > 0 {
+		writeJSONField(writer, &first, "costDetails", body.CostDetails)
 	}
 	writer.writeByte('}')
 }
@@ -1161,10 +1267,13 @@ type observationBody struct {
 	Input               any            `json:"input,omitempty"`
 	Output              any            `json:"output,omitempty"`
 	Metadata            map[string]any `json:"metadata,omitempty"`
-	StartTime           time.Time      `json:"startTime"`
+	StartTime           *time.Time     `json:"startTime,omitempty"`
 	EndTime             *time.Time     `json:"endTime,omitempty"`
 	Level               string         `json:"level,omitempty"`
 	StatusMessage       string         `json:"statusMessage,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	UsageDetails        map[string]any `json:"usageDetails,omitempty"`
+	CostDetails         map[string]any `json:"costDetails,omitempty"`
 }
 
 func traceEvent(trace Trace) ingestionEvent {
@@ -1194,10 +1303,19 @@ func observationEvent(observation Observation) ingestionEvent {
 	if observation.Type == "generation" {
 		eventType = "generation-create"
 	}
+	var startTime *time.Time
+	if !observation.StartTime.IsZero() {
+		startTime = &observation.StartTime
+	}
+	timestamp := observation.StartTime
+	if timestamp.IsZero() {
+		// The ingestion envelope needs a timestamp, but it is not call timing.
+		timestamp = observation.OccurredAt
+	}
 	return ingestionEvent{
 		ID:        remoteID("ingestion-observation", observation.ID),
 		Type:      eventType,
-		Timestamp: observation.StartTime,
+		Timestamp: timestamp,
 		Body: observationBody{
 			ID:                  observation.ID,
 			TraceID:             observation.TraceID,
@@ -1206,10 +1324,13 @@ func observationEvent(observation Observation) ingestionEvent {
 			Input:               observation.Input,
 			Output:              observation.Output,
 			Metadata:            observation.Metadata,
-			StartTime:           observation.StartTime,
+			StartTime:           startTime,
 			EndTime:             observation.EndTime,
 			Level:               statusLevel(observation.Status),
 			StatusMessage:       observation.Status,
+			Model:               observation.Model,
+			UsageDetails:        observation.UsageDetails,
+			CostDetails:         observation.CostDetails,
 		},
 	}
 }

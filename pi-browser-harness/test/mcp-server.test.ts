@@ -96,7 +96,7 @@ describe("browser MCP server", () => {
     transports.length = 0;
   });
 
-  it("advertises the sixteen stable tools in order and no ask_user", async () => {
+  it("advertises a lifecycle acknowledgement plus the sixteen authoring tools and no ask_user", async () => {
     const builder = makeBuilder();
     const server = createBrowserMcpServer(builder);
     const [serverTransport, clientTransport] =
@@ -109,6 +109,7 @@ describe("browser MCP server", () => {
 
     const result = await client.listTools();
     expect(result.tools.map((tool) => tool.name)).toEqual([
+      "close_session",
       ...BROWSER_TOOL_NAMES,
     ]);
     expect(result.tools.map((tool) => tool.name)).not.toContain("ask_user");
@@ -306,11 +307,28 @@ describe("browser MCP server", () => {
     expect(builder.closeCount).toBe(1);
   });
 
-  it("fatal builder error closes the builder, invokes onFatal, and surfaces the error to the client without closing the transport", async () => {
+  it("concurrent close calls both wait for the browser release", async () => {
+    const builder = makeBuilder();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    builder.close = async () => { builder.closeCount += 1; await gate; };
+    const server = createBrowserMcpServer(builder);
+    let secondReturned = false;
+    const first = server.close();
+    const second = server.close().then(() => { secondReturned = true; });
+    await Promise.resolve();
+    expect(secondReturned).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(builder.closeCount).toBe(1);
+  });
+
+  it.each([undefined, ["value", "expect_value"]])("fatal builder error preserves redaction markers %j and closes the builder without closing the transport", async (redactedArgs) => {
     const builder = makeBuilder();
     const fatal = new FatalCaseBuilderError(
       CODE_COMMITTED_PREFIX_REPLAY_FAILED,
       "replay failed",
+      redactedArgs ? { ok: false, error: "action_failed", redacted_args: redactedArgs } : undefined,
     );
     builder.setFatal("open_page", fatal);
 
@@ -340,6 +358,9 @@ describe("browser MCP server", () => {
       .map((item) => item.text)
       .join("\n");
     expect(text).toContain("replay failed");
+    if (redactedArgs) {
+      expect(result.structuredContent).toMatchObject({ redacted_args: ["value", "expect_value"] });
+    }
 
     // builder is closed exactly once
     expect(builder.closeCount).toBe(1);

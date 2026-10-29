@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,9 @@ var (
 
 // Store owns transaction-scoped access to the AgentTrace PostgreSQL ledger.
 type Store struct {
-	pool *pgxpool.Pool
+	pool              *pgxpool.Pool
+	managementEnabled atomic.Bool
+	environmentPolicy atomic.Pointer[json.RawMessage]
 }
 
 // NewStore binds repositories to an existing PostgreSQL connection pool.

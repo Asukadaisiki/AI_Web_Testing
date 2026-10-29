@@ -1,0 +1,115 @@
+{
+  "model": {
+    "provider": "openai-compatible",
+    "name": "glm-5.3-flash"
+  },
+  "checks": {
+    "preflight": "passed",
+    "cancel_requested_while_active": "passed",
+    "success_persistence": "passed",
+    "success_sse_reconnect": "passed",
+    "success_langfuse": "passed",
+    "failure_persistence": "passed",
+    "failure_sse_reconnect": "passed",
+    "failure_langfuse": "passed",
+    "active_cancel_persistence": "passed",
+    "active_cancel_sse_reconnect": "passed",
+    "active_cancel_langfuse": "passed"
+  },
+  "runs": {
+    "success": {
+      "run_id": "run_7ac8ce4b1593b2cb0d847d8eee12acdf",
+      "conversation_id": "conv_82500ce3c408be6205699d9e1a3c6e0a",
+      "status": "succeeded",
+      "usage_model_attributed": true,
+      "model_evidence": {
+        "calls": 4,
+        "min_duration_seconds": 6.469,
+        "max_duration_seconds": 17.175,
+        "inputs_captured": true
+      },
+      "artifacts_downloaded": 4,
+      "counts": {
+        "messages": 1,
+        "spans": 10,
+        "attempts": 8,
+        "usage": 4,
+        "operations": 3,
+        "events": 20,
+        "completed": 1,
+        "outbox": 21,
+        "pending_outbox": 0,
+        "commands": 1,
+        "processed_commands": 1
+      },
+      "redis_entries": 20,
+      "redis_ttl": 86399,
+      "sse_events": 20,
+      "langfuse": {
+        "trace_id": "agenttrace-trace-run_7ac8ce4b1593b2cb0d847d8eee12acdf",
+        "observations": 10,
+        "status": "succeeded",
+        "current_input_verified": true,
+        "generation_model": "glm-5.3-flash",
+        "generation_usage_verified": true,
+        "generation_inputs_verified": true
+      }
+    },
+    "failure": {
+      "run_id": "run_00ada4a19eecbea4cf4ca4c025f050a8",
+      "conversation_id": "conv_df3ab6a0995cdbfe835108888af0f3be",
+      "status": "failed",
+      "counts": {
+        "messages": 1,
+        "spans": 8,
+        "attempts": 6,
+        "usage": 3,
+        "operations": 2,
+        "events": 15,
+        "completed": 1,
+        "outbox": 16,
+        "pending_outbox": 0,
+        "commands": 1,
+        "processed_commands": 1
+      },
+      "redis_entries": 15,
+      "redis_ttl": 86383,
+      "sse_events": 15,
+      "langfuse": {
+        "trace_id": "agenttrace-trace-run_00ada4a19eecbea4cf4ca4c025f050a8",
+        "observations": 8,
+        "status": "failed",
+        "current_input_verified": true
+      }
+    },
+    "active_cancel": {
+      "run_id": "run_e7ef7902a7d8eec2c2041bf22679a7b0",
+      "conversation_id": "conv_049ab27d91511db17951d84249aaca3d",
+      "status": "cancelled",
+      "counts": {
+        "messages": 1,
+        "spans": 2,
+        "attempts": 2,
+        "usage": 0,
+        "operations": 0,
+        "events": 5,
+        "completed": 1,
+        "outbox": 6,
+        "pending_outbox": 0,
+        "commands": 1,
+        "processed_commands": 1
+      },
+      "redis_entries": 5,
+      "redis_ttl": 86347,
+      "sse_events": 5,
+      "langfuse": {
+        "trace_id": "agenttrace-trace-run_e7ef7902a7d8eec2c2041bf22679a7b0",
+        "observations": 2,
+        "status": "cancelled",
+        "current_input_verified": true
+      }
+    }
+  },
+  "project_id": "prj_4510c095983bb880101b20b53edf63f3",
+  "status": "passed"
+}

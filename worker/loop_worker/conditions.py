@@ -71,6 +71,7 @@ async def evaluate_condition(
 
     satisfied = False
     detail: str | None = None
+    public_value = condition.value
 
     if condition.type == "url_contains":
         current = page.url
@@ -92,13 +93,22 @@ async def evaluate_condition(
             detail = "condition value_equals requires a step target, but this step has none"
         else:
             try:
+                input_type = await target_locator.get_attribute("type", timeout=1000)
+                sensitive = (input_type or "").lower() == "password"
+                if sensitive:
+                    public_value = "[redacted]"
                 actual = await target_locator.input_value(timeout=1000)
             except Exception as exc:
                 satisfied = False
-                detail = f"could not read target value: {exc}"
+                public_value = "[redacted]"
+                detail = "could not read target value"
             else:
                 satisfied = actual == condition.value
-                detail = None if satisfied else f"target value is {actual!r}, expected {condition.value!r}"
+                if not satisfied:
+                    detail = (
+                        "password value does not match" if sensitive
+                        else f"target value is {actual!r}, expected {condition.value!r}"
+                    )
     elif condition.type == "element_state":
         if target_locator is None:
             satisfied = False
@@ -170,7 +180,7 @@ async def evaluate_condition(
     return ConditionResult(
         phase="pre" if phase == "pre" else "post",
         type=condition.type,
-        value=condition.value,
+        value=public_value,
         satisfied=satisfied,
         detail=detail,
     )

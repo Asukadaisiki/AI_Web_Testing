@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/browserprovider"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/serviceprobe"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
 )
 
@@ -50,34 +52,43 @@ type HealthDependencies struct {
 	Redis    func(context.Context) error
 	Worker   func(context.Context) error
 	Langfuse func(context.Context) error
+	KafkaLag func(context.Context) serviceprobe.Measurement
 }
 
 type healthDependencies = HealthDependencies
 
 // ServerConfig supplies the server-owned dependencies for the API process.
 type ServerConfig struct {
-	Repository        Repository
-	Profile           agentprofile.Profile
-	Model             event.ModelRef
-	Stream            *stream.Service
-	Live              live.LiveStore
-	Health            HealthDependencies
-	ArtifactDir       string
-	HeartbeatInterval time.Duration
-	SSEWriteTimeout   time.Duration
+	Repository           Repository
+	Profile              agentprofile.Profile
+	Model                event.ModelRef
+	Runtimes             []execution.Runtime
+	Stream               *stream.Service
+	Health               HealthDependencies
+	ArtifactDir          string
+	BridgeToken          string
+	BridgeProjectID      string
+	BridgeConversationID string
+	ManagementEnabled    bool
+	BrowserProvider      *browserprovider.Client
+	HeartbeatInterval    time.Duration
+	SSEWriteTimeout      time.Duration
 }
 
 // Server is an HTTP handler for the one-workspace AgentTrace API.
 type Server struct {
-	repository Repository
-	profile    agentprofile.Profile
-	model      event.ModelRef
-	stream     *stream.Service
-	live       live.LiveStore
-	health     HealthDependencies
-	heartbeat  time.Duration
-	writeWait  time.Duration
-	handler    http.Handler
+	repository      Repository
+	profile         agentprofile.Profile
+	model           event.ModelRef
+	runtimes        []execution.Runtime
+	harnesses       HarnessRepository
+	management      bool
+	browserProvider *browserprovider.Client
+	stream          *stream.Service
+	health          HealthDependencies
+	heartbeat       time.Duration
+	writeWait       time.Duration
+	handler         http.Handler
 }
 
 // New constructs the API routes. Dependency availability is reported through
@@ -102,15 +113,18 @@ func New(config ServerConfig) *Server {
 		model.ReasoningEffort = config.Profile.Model.ReasoningEffort
 	}
 	server := &Server{
-		repository: config.Repository,
-		profile:    config.Profile,
-		model:      model,
-		stream:     config.Stream,
-		live:       config.Live,
-		health:     config.Health,
-		heartbeat:  heartbeat,
-		writeWait:  writeWait,
+		repository:      config.Repository,
+		profile:         config.Profile,
+		model:           model,
+		runtimes:        append([]execution.Runtime(nil), config.Runtimes...),
+		stream:          config.Stream,
+		health:          config.Health,
+		heartbeat:       heartbeat,
+		writeWait:       writeWait,
+		management:      config.ManagementEnabled,
+		browserProvider: config.BrowserProvider,
 	}
+	server.harnesses, _ = config.Repository.(HarnessRepository)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/projects", server.handleListProjects)
 	mux.HandleFunc("POST /api/v1/projects", server.handleCreateProject)
@@ -127,11 +141,26 @@ func New(config ServerConfig) *Server {
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", server.handleCancel)
 	mux.HandleFunc("POST /api/v1/runs/{id}/responses", server.handleResponse)
 	mux.HandleFunc("GET /api/v1/agents", server.handleAgents)
+	mux.HandleFunc("GET /api/v1/runtimes", server.handleRuntimes)
+	mux.HandleFunc("GET /api/v1/harnesses", server.handleListHarnesses)
+	mux.HandleFunc("GET /api/v1/harnesses/{id}", server.handleGetHarness)
+	mux.HandleFunc("POST /api/v1/harnesses", server.handleCreateHarness)
+	mux.HandleFunc("PUT /api/v1/harnesses/{id}", server.handleUpdateHarness)
+	mux.HandleFunc("DELETE /api/v1/harnesses/{id}", server.handleDeleteHarness)
 	mux.HandleFunc("GET /api/v1/health", server.handleHealth)
+	if config.ManagementEnabled {
+		server.registerRegistryRoutes(mux)
+		server.registerEnvironmentRoutes(mux)
+		server.registerControlSessionRoutes(mux)
+		server.registerWorkerRoutes(mux)
+	}
 	if config.ArtifactDir != "" {
 		mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(config.ArtifactDir))))
 	}
 	server.handler = mux
+	if config.ManagementEnabled || config.BridgeToken != "" || config.BridgeProjectID != "" || config.BridgeConversationID != "" {
+		server.handler = server.bridgeGuard(mux, config, config.ManagementEnabled)
+	}
 	return server
 }
 

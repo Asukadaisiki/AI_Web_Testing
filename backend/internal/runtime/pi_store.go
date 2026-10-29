@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +13,6 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
-)
-
-const (
-	browserHarnessToolPrefix = "mcp__browser_harness__"
-	finishCaseToolName       = browserHarnessToolPrefix + "finish_case"
 )
 
 // HarnessAttemptRef is the durable identity of one harness attempt returned to
@@ -27,6 +22,8 @@ type HarnessAttemptRef struct {
 	RunID             string
 	AttemptNumber     int
 	ProviderAttemptID string
+	Fence             postgres.HarnessFence
+	WorkerURL         string
 	// CancelRequested is true when the run had a durable cancel request at the
 	// time the attempt was claimed. deriveOutcome forces RunCancelled in that
 	// case regardless of the harness verdict.
@@ -38,6 +35,7 @@ type PiRunOutcome struct {
 	Status    domain.RunStatus
 	Error     string
 	Assistant string
+	Uncertain bool
 }
 
 // PiTraceStore persists a Pi harness run's trace evidence and terminal state.
@@ -48,12 +46,27 @@ type PiTraceStore interface {
 	CancellationRequested(ctx context.Context, runID string) (bool, error)
 }
 
+type PiLeaseStore interface {
+	MarkRunStarted(context.Context, HarnessAttemptRef) error
+	RenewRunLease(context.Context, HarnessAttemptRef, time.Duration) error
+	ReleaseRunLease(context.Context, HarnessAttemptRef, bool) error
+	AbandonUnstartedRun(context.Context, HarnessAttemptRef) error
+}
+
 // PostgresPiTraceStore adapts the PostgreSQL harness persistence API to the
 // runtime PiTraceStore interface. It derives EvalHub logical span and attempt
 // identities from the run id, harness attempt id, source sequence, and event
 // kind. Pi provider identifiers are stored as evidence, never as primary keys.
 type PostgresPiTraceStore struct {
-	Store *postgres.Store
+	Store           *postgres.Store
+	RuntimeWorkerID string
+	LeaseTTL        time.Duration
+}
+
+func newProviderAttemptID(runID string) string {
+	// A retry of the same Run must not share routing, cancellation or SDK
+	// resource identity with an earlier session.
+	return stableID("pi-attempt", runID, rand.Text())
 }
 
 // StartRun claims the run, allocates a harness attempt, and creates the root
@@ -65,8 +78,25 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 	if strings.TrimSpace(command.RunID) == "" {
 		return HarnessAttemptRef{}, errors.New("pi run command run id is required")
 	}
-	providerAttemptID := stableID("pi-attempt", command.RunID)
-	attempt, err := s.Store.BeginHarnessAttempt(ctx, command.RunID, providerAttemptID)
+	providerAttemptID := newProviderAttemptID(command.RunID)
+	var attempt postgres.HarnessAttempt
+	var fence postgres.HarnessFence
+	var assignedURL string
+	var err error
+	if s.Store.ManagementEnabled() {
+		runtimeID := ""
+		if command.Execution != nil {
+			runtimeID = command.Execution.RuntimeID
+		}
+		claim, claimErr := s.Store.ClaimHarnessLease(ctx, postgres.LeaseClaim{
+			RunID: command.RunID, ProjectID: command.ProjectID, EnvironmentID: command.EnvironmentID,
+			ProfileGeneration: command.ProfileGeneration, RuntimeWorkerID: s.RuntimeWorkerID,
+			ProviderAttemptID: providerAttemptID, RuntimeID: runtimeID, TTL: s.LeaseTTL,
+		})
+		attempt, fence, assignedURL, err = claim.Attempt, claim.Fence, claim.WorkerURL, claimErr
+	} else {
+		attempt, err = s.Store.BeginHarnessAttempt(ctx, command.RunID, providerAttemptID)
+	}
 	if err != nil {
 		return HarnessAttemptRef{}, err
 	}
@@ -76,6 +106,8 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 		AttemptNumber:     attempt.AttemptNumber,
 		ProviderAttemptID: attempt.ProviderAttemptID,
 		CancelRequested:   attempt.CancelRequested,
+		Fence:             fence,
+		WorkerURL:         assignedURL,
 	}
 	now := time.Now().UTC()
 	rootSpan := domain.Span{
@@ -104,7 +136,12 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 			StartedAt:     now,
 		},
 	}
-	if err := s.Store.StartTraceAttempt(ctx, started); err != nil {
+	if s.Store.ManagementEnabled() {
+		err = s.Store.InitializeHarnessTrace(ctx, fence, started)
+	} else {
+		err = s.Store.StartTraceAttempt(ctx, started)
+	}
+	if err != nil {
 		return HarnessAttemptRef{}, fmt.Errorf("create pi root span: %w", err)
 	}
 	return ref, nil
@@ -137,7 +174,7 @@ func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref Harnes
 	envelope := event.Envelope[json.RawMessage]{
 		SchemaVersion: "agenttrace.event.v1",
 		EventID:       eventID,
-		EventType:     "harness.completed",
+		EventType:     event.RunCompleted,
 		AggregateID:   ref.RunID,
 		CorrelationID: ref.RunID,
 		OccurredAt:    now,
@@ -145,9 +182,11 @@ func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref Harnes
 	return s.Store.FinishHarnessAttempt(ctx, postgres.HarnessFinish{
 		RunID:     ref.RunID,
 		AttemptID: ref.ID,
+		Fence:     ref.Fence,
 		Status:    outcome.Status,
 		Error:     errorPayload,
 		Assistant: outcome.Assistant,
+		Uncertain: outcome.Uncertain,
 		Event:     envelope,
 	})
 }
@@ -179,6 +218,7 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 	record := postgres.HarnessEventRecord{
 		RunID:          ref.RunID,
 		AttemptID:      ref.ID,
+		Fence:          ref.Fence,
 		SourceSequence: ev.Sequence,
 		SourceType:     string(ev.Type),
 		Event:          envelope,
@@ -188,11 +228,34 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 	case piharness.EventStarted:
 		// No additional trace evidence; the run span already exists.
 	case piharness.EventMessageCompleted:
+		if _, err := decodeModelMessage(ev.Payload); err != nil {
+			return record, err
+		}
 		span, attempt := s.modelSpan(ref, ev)
 		record.Span = &span
 		record.Attempt = &attempt
 	case piharness.EventUsage:
-		modelSpanID, err := s.Store.LatestModelSpanID(ctx, ref.RunID)
+		projected, err := modelUsage(ev.Payload, "")
+		if err != nil {
+			return record, err
+		}
+		if projected == nil {
+			break
+		}
+		queryModelID, cumulative, err := sdkQueryUsageIdentity(ev.Payload)
+		if err != nil {
+			return record, err
+		}
+		if cumulative {
+			// SDK pipeline totals include sidechains and cannot be attributed
+			// to the latest individual assistant message.
+			attemptID := AttemptID(RunSpanID(ref.RunID), 1)
+			projected.ID = stableID("usage", ref.ID, queryModelID)
+			record.Usage = projected
+			record.Attempt = &postgres.TraceAttempt{ID: attemptID, AttemptNumber: 1}
+			break
+		}
+		modelSpanID, err := s.Store.LatestHarnessModelSpanID(ctx, ref.RunID, ref.ID)
 		if err != nil {
 			return record, err
 		}
@@ -200,13 +263,8 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 			return record, errors.New("pi.usage has no preceding model span")
 		}
 		attemptID := AttemptID(modelSpanID, 1)
-		var payload piharness.UsagePayload
-		_ = json.Unmarshal(ev.Payload, &payload)
-		record.Usage = &postgres.TraceUsage{
-			ID:       stableID("usage", attemptID),
-			Provider: "model",
-			Usage:    usage.Call(int(payload.InputTokens), int(payload.OutputTokens), 0, 0),
-		}
+		projected.ID = stableID("usage", attemptID)
+		record.Usage = projected
 		// Usage must attach to an attempt; build a minimal attempt reference so
 		// the insert links to the existing model span attempt.
 		record.Attempt = &postgres.TraceAttempt{ID: attemptID, AttemptNumber: 1}
@@ -218,79 +276,29 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 		span, attempt := s.toolSpan(ref, ev, "completed")
 		record.Span = &span
 		record.Attempt = &attempt
-		var payload piharness.ToolCompletedPayload
-		_ = json.Unmarshal(ev.Payload, &payload)
-		if isBrowserHarnessTool(payload.ToolName) && payload.ToolName != finishCaseToolName {
-			record.Operation = browserToolOperationResult(ref, ev, attempt.OperationID, payload)
-		}
-	case piharness.EventObservation:
-		var payload piharness.ObservationPayload
-		_ = json.Unmarshal(ev.Payload, &payload)
-		toolAttempt, err := s.Store.ToolAttemptByCallID(
-			ctx, ref.RunID, ref.ID, payload.ToolCallID, ev.Sequence,
-		)
-		if err != nil {
-			return record, err
-		}
-		if toolAttempt.SpanID == "" || toolAttempt.SpanAttemptID == "" {
-			return record, errors.New("browser.observation has no matching tool attempt")
-		}
-		spanID := stableID(
-			"span", ref.RunID, ref.ID, "observation", payload.ToolCallID,
-			fmt.Sprintf("%d", ev.Sequence),
-		)
-		span := domain.Span{
-			ID:           spanID,
-			RunID:        ref.RunID,
-			TraceID:      traceID(ref.RunID),
-			SpanID:       spanID,
-			ParentSpanID: toolAttempt.SpanID,
-			Kind:         domain.SpanOperation,
-			Name:         "observation",
-			Status:       "succeeded",
-			StartedAt:    occurredAt,
-			EndedAt:      &occurredAt,
-			Output:       append(json.RawMessage(nil), ev.Payload...),
-		}
-		record.Span = &span
-	case piharness.EventCaseCompleted:
-		finishAttempt, err := s.Store.LatestCompletedToolAttempt(
-			ctx, ref.RunID, ref.ID, finishCaseToolName, ev.Sequence,
-		)
-		if err != nil {
-			return record, err
-		}
-		if finishAttempt.SpanID == "" || finishAttempt.SpanAttemptID == "" {
-			return record, errors.New(
-				"browser.case.completed has no completed finish_case attempt",
-			)
-		}
-		var payload piharness.CaseCompletedPayload
-		_ = json.Unmarshal(ev.Payload, &payload)
-		verdict := payload.Verdict
-		if verdict == "" {
-			verdict = "unknown"
-		}
-		operationID := finishAttempt.OperationID
-		if operationID == "" {
-			operationID = stableID("operation", ref.RunID, ref.ID, "case")
-		}
-		operationResult := postgres.TraceOperationResult{
-			ID:          stableID("result", ref.ID, fmt.Sprintf("%d", ev.Sequence)),
-			OperationID: operationID,
-			Status:      verdict,
-			Result:      append(json.RawMessage(nil), payload.DryRun...),
-			Artifacts:   deriveBrowserStepArtifacts(payload.DryRun),
-		}
-		record.Operation = &operationResult
-		record.Attempt = &postgres.TraceAttempt{
-			ID:            finishAttempt.SpanAttemptID,
-			AttemptNumber: 1,
-		}
 	case piharness.EventSettled, piharness.EventFailed:
 		// Terminal evidence is recorded by CompleteHarnessRun.
 	}
+	if err := (browserProjection{Store: s.Store}).project(ctx, ref, ev, &record); err != nil {
+		return record, err
+	}
 	return record, nil
+}
+
+func (s PostgresPiTraceStore) MarkRunStarted(ctx context.Context, ref HarnessAttemptRef) error {
+	return s.Store.MarkHarnessStarted(ctx, ref.Fence)
+}
+
+func (s PostgresPiTraceStore) RenewRunLease(ctx context.Context, ref HarnessAttemptRef, ttl time.Duration) error {
+	return s.Store.RenewHarnessLease(ctx, ref.Fence, ttl)
+}
+
+func (s PostgresPiTraceStore) ReleaseRunLease(ctx context.Context, ref HarnessAttemptRef, acknowledged bool) error {
+	return s.Store.ReleaseHarnessLease(ctx, ref.Fence, acknowledged)
+}
+
+func (s PostgresPiTraceStore) AbandonUnstartedRun(ctx context.Context, ref HarnessAttemptRef) error {
+	return s.Store.AbandonUnstartedHarnessLease(ctx, ref.Fence)
 }
 
 func (s PostgresPiTraceStore) modelSpan(ref HarnessAttemptRef, ev piharness.Event) (domain.Span, postgres.TraceAttempt) {
@@ -299,8 +307,10 @@ func (s PostgresPiTraceStore) modelSpan(ref HarnessAttemptRef, ev piharness.Even
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	var payload piharness.MessageCompletedPayload
-	_ = json.Unmarshal(ev.Payload, &payload)
+	payload, _ := decodeModelMessage(ev.Payload)
+	if payload.StartedAt != nil && !payload.StartedAt.IsZero() {
+		now = *payload.StartedAt
+	}
 	span := domain.Span{
 		ID:           spanID,
 		RunID:        ref.RunID,
@@ -311,18 +321,22 @@ func (s PostgresPiTraceStore) modelSpan(ref HarnessAttemptRef, ev piharness.Even
 		Name:         "message",
 		Status:       "succeeded",
 		StartedAt:    now,
-		EndedAt:      &now,
+		EndedAt:      payload.EndedAt,
+		Input:        append(json.RawMessage(nil), payload.Input...),
 		Output:       append(json.RawMessage(nil), ev.Payload...),
 	}
 	attempt := postgres.TraceAttempt{
 		ID:            AttemptID(spanID, 1),
 		AttemptNumber: 1,
-		Provider:      "model",
+		Provider:      payload.Provider,
 		Status:        "succeeded",
-		Request:       json.RawMessage(`{}`),
+		Request:       append(json.RawMessage(nil), payload.Input...),
 		Response:      append(json.RawMessage(nil), ev.Payload...),
 		StartedAt:     now,
-		EndedAt:       &now,
+		EndedAt:       payload.EndedAt,
+	}
+	if attempt.Provider == "" {
+		attempt.Provider = "model"
 	}
 	return span, attempt
 }
@@ -393,106 +407,6 @@ func (s PostgresPiTraceStore) toolSpan(ref HarnessAttemptRef, ev piharness.Event
 		}
 	}
 	return span, attempt
-}
-
-func deriveBrowserStepArtifacts(dryRun json.RawMessage) json.RawMessage {
-	var decoded struct {
-		Steps []struct {
-			Evidence struct {
-				ScreenshotPath string `json:"screenshot_path"`
-			} `json:"evidence"`
-		} `json:"steps"`
-	}
-	_ = json.Unmarshal(dryRun, &decoded)
-
-	paths := make([]string, 0, len(decoded.Steps))
-	seen := make(map[string]struct{}, len(decoded.Steps))
-	for _, step := range decoded.Steps {
-		path := step.Evidence.ScreenshotPath
-		if path == "" {
-			continue
-		}
-		if _, duplicate := seen[path]; duplicate {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	encoded, _ := json.Marshal(map[string][]string{"screenshot_paths": paths})
-	return encoded
-}
-
-func isBrowserHarnessTool(toolName string) bool {
-	return strings.HasPrefix(toolName, browserHarnessToolPrefix)
-}
-
-func browserToolOperationResult(
-	ref HarnessAttemptRef,
-	ev piharness.Event,
-	operationID string,
-	payload piharness.ToolCompletedPayload,
-) *postgres.TraceOperationResult {
-	result := append(json.RawMessage(nil), payload.StructuredResult...)
-	if len(result) == 0 {
-		result = json.RawMessage(`{}`)
-	}
-	var structured struct {
-		OK     bool   `json:"ok"`
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-	}
-	_ = json.Unmarshal(result, &structured)
-
-	status := "passed"
-	if payload.IsError || !structured.OK {
-		status = "failed"
-	}
-	var errorEvidence json.RawMessage
-	if status == "failed" {
-		errorCode := strings.TrimSpace(structured.Error)
-		if errorCode == "" {
-			if payload.IsError {
-				errorCode = "tool_transport_error"
-			} else {
-				errorCode = "tool_failed"
-			}
-		}
-		detail := strings.TrimSpace(structured.Detail)
-		if detail == "" {
-			if payload.IsError {
-				detail = "tool completion transport marked error"
-			} else {
-				detail = "tool completion has no successful structured result"
-			}
-		}
-		errorEvidence, _ = json.Marshal(map[string]string{
-			"error":  errorCode,
-			"detail": detail,
-		})
-	}
-	return &postgres.TraceOperationResult{
-		ID:          stableID("result", ref.ID, fmt.Sprintf("%d", ev.Sequence)),
-		OperationID: operationID,
-		Status:      status,
-		Result:      result,
-		Artifacts:   deriveBrowserToolArtifacts(result),
-		Error:       errorEvidence,
-	}
-}
-
-func deriveBrowserToolArtifacts(result json.RawMessage) json.RawMessage {
-	var decoded struct {
-		Page struct {
-			ScreenshotPath string `json:"screenshot_path"`
-		} `json:"page"`
-	}
-	_ = json.Unmarshal(result, &decoded)
-	paths := make([]string, 0, 1)
-	if path := strings.TrimSpace(decoded.Page.ScreenshotPath); path != "" {
-		paths = append(paths, path)
-	}
-	encoded, _ := json.Marshal(map[string][]string{"screenshot_paths": paths})
-	return encoded
 }
 
 func traceID(runID string) string {

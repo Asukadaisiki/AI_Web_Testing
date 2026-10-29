@@ -3,26 +3,27 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
-	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -61,20 +62,41 @@ func run() error {
 	}
 	defer bus.Close()
 
-	var (
-		redisClient *goredis.Client
-		liveStore   live.LiveStore
-	)
-	if cfg.Redis.Enabled {
-		redisClient = goredis.NewClient(&goredis.Options{
-			Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
-		})
-		defer redisClient.Close()
-		liveStore = liveredis.NewClient(redisClient)
-	}
-
 	store := postgres.NewStore(pool)
-	runner := newCommandRunner(cfg, store)
+	store.SetManagementEnabled(cfg.ManagementEnabled)
+	workerID := ""
+	if cfg.ManagementEnabled {
+		runtimeNode, browserNode, err := configuredWorkers(cfg)
+		if err != nil {
+			return fmt.Errorf("configure workers: %w", err)
+		}
+		if _, err := store.RegisterWorker(ctx, runtimeNode); err != nil {
+			return fmt.Errorf("register runtime worker: %w", err)
+		}
+		if err := probeBrowserWorker(ctx, browserNode.Endpoint); err != nil {
+			return fmt.Errorf("browser worker readiness: %w", err)
+		}
+		if _, err := store.RegisterWorker(ctx, browserNode); err != nil {
+			return fmt.Errorf("register browser worker: %w", err)
+		}
+		workerID = runtimeNode.ID
+		workerCtx, cancelWorkers := context.WithCancel(ctx)
+		workerDone := make(chan struct{})
+		go func() {
+			defer close(workerDone)
+			maintainWorkers(workerCtx, store, runtimeNode.ID, browserNode)
+		}()
+		defer func() {
+			cancelWorkers()
+			<-workerDone
+		}()
+	}
+	runner := newCommandRunner(cfg, store, workerID)
+	defer func() {
+		if err := runner.Close(); err != nil {
+			log.Printf("close session host: %v", err)
+		}
+	}()
 	consumerRuntime := &runtime.Consumer{
 		Inbox: runtime.DeduplicatedInbox{
 			Deduplicator: consumer.NewDeduplicator(pool, "agenttrace-runtime"),
@@ -82,32 +104,47 @@ func run() error {
 		Runner:     runner,
 		Publisher:  bus,
 		RetryStore: runtime.PostgresRetryStore{Store: store, Consumer: "agenttrace-runtime"},
-		Live:       liveStore,
-		LeaseOwner: processID("runtime"),
 		DLQTopic:   cfg.Kafka.DLQTopic,
 	}
+	if cfg.ManagementEnabled {
+		consumerRuntime.Ready = func(ctx context.Context) (bool, error) {
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return store.WorkerReady(probeCtx, workerID)
+		}
+	}
 	if err := consumeWorkers(ctx, cfg.RuntimeConcurrency, func(workerCtx context.Context) error {
-		return consumerRuntime.Consume(workerCtx, bus, cfg.Kafka.GroupID)
+		return consumeWhenReady(workerCtx, consumerRuntime.Ready, func(ctx context.Context) error {
+			return consumerRuntime.Consume(ctx, bus, cfg.Kafka.GroupID)
+		}, 250*time.Millisecond)
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("consume AgentTrace commands: %w", err)
 	}
 	return nil
 }
 
-// newCommandRunner builds the sole production CommandRunner: a concurrency-
-// bounded PiRunner that spawns the pi-browser-harness subprocess. The model
-// and HTTP operation dispatcher are intentionally not constructed here; the
-// harness owns both the model turn loop and browser operation dispatch.
-func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandRunner {
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		panic(fmt.Errorf("load browser profile for runtime: %w", err))
+type managedCommandRunner interface {
+	runtime.CommandRunner
+	Close() error
+}
+
+// newCommandRunner bounds session concurrency and owns one shared host
+// transport. Model execution and the selected Harness live behind that
+// transport; Langfuse observes persisted events independently.
+func newCommandRunner(cfg config.Config, store *postgres.Store, workerIDs ...string) managedCommandRunner {
+	workerID := ""
+	if len(workerIDs) > 0 {
+		workerID = workerIDs[0]
 	}
-	process := &piharness.ProcessRunner{
+	hostEnvironment := harnessEnvironment(cfg.Harness)
+	if cfg.BrowserProviderToken != "" {
+		hostEnvironment = append(hostEnvironment, "AGENTTRACE_BROWSER_PROVIDER_TOKEN="+cfg.BrowserProviderToken)
+	}
+	process := &piharness.SharedProcessRunner{
 		Command:          cfg.Harness.Command,
-		Args:             []string{cfg.Harness.Entry},
+		Args:             []string{cfg.Harness.Entry, "--server"},
 		WorkingDirectory: cfg.Harness.Directory,
-		Environment:      harnessEnvironment(cfg.Harness),
+		Environment:      hostEnvironment,
 		MaxLineBytes:     cfg.Harness.MaxLineBytes,
 		MaxStderrBytes:   cfg.Harness.MaxStderrBytes,
 		TerminationGrace: cfg.Harness.TerminationGrace,
@@ -115,15 +152,103 @@ func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandR
 	}
 	piRunner := runtime.PiRunner{
 		Process:                process,
-		Store:                  runtime.PostgresPiTraceStore{Store: store},
+		Store:                  runtime.PostgresPiTraceStore{Store: store, RuntimeWorkerID: workerID},
 		WorkerURL:              cfg.WorkerURL,
-		DefaultReasoningEffort: profile.Model.ReasoningEffort,
+		DefaultReasoningEffort: runtimeReasoningEffort(cfg.Model),
 	}
 	bounded, err := newBoundedRunner(piRunner, cfg.RuntimeConcurrency)
 	if err != nil {
 		panic(err)
 	}
+	bounded.closeHarness = process.Close
 	return bounded
+}
+
+func configuredWorkers(cfg config.Config) (postgres.WorkerRegistration, postgres.WorkerRegistration, error) {
+	if cfg.ManagementEnabled && strings.TrimSpace(cfg.BrowserProviderToken) == "" {
+		return postgres.WorkerRegistration{}, postgres.WorkerRegistration{}, errors.New("management runtime requires AGENTTRACE_BROWSER_PROVIDER_TOKEN")
+	}
+	capacity := 1
+	if raw := os.Getenv("AGENTTRACE_BROWSER_WORKER_CAPACITY"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 1000 {
+			return postgres.WorkerRegistration{}, postgres.WorkerRegistration{}, errors.New("AGENTTRACE_BROWSER_WORKER_CAPACITY must be 1..1000")
+		}
+		capacity = n
+	}
+	runtimeID := strings.TrimSpace(os.Getenv("AGENTTRACE_RUNTIME_WORKER_ID"))
+	if runtimeID == "" {
+		host, err := os.Hostname()
+		if err != nil {
+			return postgres.WorkerRegistration{}, postgres.WorkerRegistration{}, err
+		}
+		runtimeID = fmt.Sprintf("runtime-%s-%d-%s", host, os.Getpid(), rand.Text())
+	}
+	browserID := strings.TrimSpace(os.Getenv("AGENTTRACE_BROWSER_WORKER_ID"))
+	if browserID == "" {
+		browserID = postgres.BrowserWorkerID(cfg.WorkerURL)
+		if browserID == "" {
+			return postgres.WorkerRegistration{}, postgres.WorkerRegistration{}, errors.New("invalid browser worker endpoint")
+		}
+	}
+	project := strings.TrimSpace(os.Getenv("AGENTTRACE_WORKER_PROJECT_ID"))
+	return postgres.WorkerRegistration{ID: runtimeID, Role: "runtime", Capacity: cfg.RuntimeConcurrency, ProjectID: project,
+			Version: "agenttrace-runtime.v3", RuntimeIDs: []string{"pi", "claude-code", "codex"}},
+		postgres.WorkerRegistration{ID: browserID, Role: "browser", Capacity: capacity, ProjectID: project,
+			Endpoint: cfg.WorkerURL, Version: "browser-worker.v3"}, nil
+}
+
+func probeBrowserWorker(ctx context.Context, endpoint string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/health", nil)
+	if err != nil {
+		return err
+	}
+	response, err := (&http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("browser health returned %d", response.StatusCode)
+	}
+	return nil
+}
+
+func maintainWorkers(ctx context.Context, store *postgres.Store, runtimeID string, browser postgres.WorkerRegistration) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		heartbeatCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		if err := store.HeartbeatWorker(heartbeatCtx, runtimeID); err != nil && ctx.Err() == nil {
+			log.Printf("runtime heartbeat failed (claims fail closed): %v", err)
+		}
+		// Browser liveness is never inferred from runtime liveness.
+		if probeBrowserWorker(heartbeatCtx, browser.Endpoint) == nil {
+			if err := store.HeartbeatWorker(heartbeatCtx, browser.ID); err != nil && ctx.Err() == nil {
+				log.Printf("browser heartbeat failed: %v", err)
+			}
+		}
+		if _, err := store.RecoverExpiredHarnessLeases(heartbeatCtx, 100); err != nil && ctx.Err() == nil {
+			log.Printf("lease recovery failed: %v", err)
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runtimeReasoningEffort(model config.Model) string {
+	if model.ReasoningEffort != "" {
+		return model.ReasoningEffort
+	}
+	return config.DefaultReasoningEffort
 }
 
 func harnessEnvironment(h config.Harness) []string {
@@ -182,9 +307,39 @@ func consumeWorkers(ctx context.Context, count int, consume func(context.Context
 	return ctx.Err()
 }
 
+// Each consumer relinquishes/rejoins independently. Pausing a queued partition
+// must not cancel sibling consumers which are still releasing active attempts.
+func consumeWhenReady(ctx context.Context, ready func(context.Context) (bool, error), consume func(context.Context) error, interval time.Duration) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		canJoin := true
+		if ready != nil {
+			var err error
+			canJoin, err = ready(ctx)
+			canJoin = canJoin && err == nil
+		}
+		if canJoin {
+			err := consume(ctx)
+			if !errors.Is(err, runtime.ErrConsumerPaused) {
+				return err
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 type boundedRunner struct {
-	runner runtime.CommandRunner
-	slots  chan struct{}
+	runner       runtime.CommandRunner
+	slots        chan struct{}
+	closeHarness func() error
 }
 
 func newBoundedRunner(runner runtime.CommandRunner, limit int) (*boundedRunner, error) {
@@ -207,6 +362,9 @@ func (r *boundedRunner) Run(ctx context.Context, command event.RunCommand) error
 	return r.runner.Run(ctx, command)
 }
 
-func processID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, os.Getpid())
+func (r *boundedRunner) Close() error {
+	if r.closeHarness != nil {
+		return r.closeHarness()
+	}
+	return nil
 }

@@ -1,17 +1,183 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
+
+func TestGenericToolCompletionDoesNotCreateBrowserEvidence(t *testing.T) {
+	ref := HarnessAttemptRef{RunID: "run-1", ID: "attempt-1"}
+	ev := harEvent(piharness.EventToolCompleted, ref.RunID, "provider-1", 2,
+		`{"tool_call_id":"call-1","tool_name":"lookup_record","is_error":false,"structured_result":{"value":42}}`)
+	record, err := (PostgresPiTraceStore{}).deriveEvent(context.Background(), ref, ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Span == nil || record.Span.Name != "lookup_record" || record.Operation != nil {
+		t.Fatalf("generic tool projection = %#v", record)
+	}
+}
+
+func TestUsageProjectionPreservesUnknownAndReportedZeroCost(t *testing.T) {
+	for _, test := range []struct {
+		raw      string
+		wantCost bool
+	}{
+		{`{"input_tokens":10,"output_tokens":5}`, false},
+		{`{"input_tokens":0,"output_tokens":0,"cost_micros":0}`, true},
+	} {
+		record, err := modelUsage(json.RawMessage(test.raw), "attempt-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var details map[string]any
+		if err := json.Unmarshal(record.Details, &details); err != nil {
+			t.Fatal(err)
+		}
+		_, hasCost := details["cost_micros"]
+		if hasCost != test.wantCost {
+			t.Fatalf("cost presence = %v in %s", hasCost, record.Details)
+		}
+	}
+	if record, err := modelUsage(json.RawMessage(`{}`), "attempt-1"); err != nil || record != nil {
+		t.Fatalf("unknown usage = %#v, %v", record, err)
+	}
+	for _, raw := range []string{`{"input_tokens":-1,"output_tokens":2}`, `{"input_tokens":1}`, `{"input_tokens":1,"output_tokens":2,"cost_micros":-1}`} {
+		if _, err := modelUsage(json.RawMessage(raw), "attempt-1"); err == nil {
+			t.Fatalf("accepted invalid usage %s", raw)
+		}
+	}
+}
+
+func TestUsageProjectionPreservesReportedTotalIncludingCachedTokens(t *testing.T) {
+	record, err := modelUsage(json.RawMessage(`{"input_tokens":10,"output_tokens":5,"total_tokens":115,"cache_read_tokens":100}`), "attempt-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Usage.TotalTokens != 115 || !strings.Contains(string(record.Details), `"cache_read_tokens":100`) {
+		t.Fatalf("reported usage total/cache lost: %#v", record)
+	}
+}
+
+func TestProviderAttemptIdentityIsFreshForEachSession(t *testing.T) {
+	seen := map[string]bool{}
+	for range 16 {
+		id := newProviderAttemptID("same-run")
+		if id == "" || seen[id] {
+			t.Fatalf("execution reused provider session identity %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestModelSpanUsesReportedCallTimingAndInput(t *testing.T) {
+	ref := HarnessAttemptRef{RunID: "run-1", ID: "attempt-1"}
+	ev := harEvent(piharness.EventMessageCompleted, ref.RunID, "provider-1", 2,
+		`{"text":"answer","provider":"openai-compatible","started_at":"2026-10-28T12:00:00Z","ended_at":"2026-10-28T12:00:02Z","input":{"messages":[{"role":"user","content":"actual request"}]},"model":"real-model"}`)
+	span, attempt := (PostgresPiTraceStore{}).modelSpan(ref, ev)
+	start := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Second)
+	if !span.StartedAt.Equal(start) || span.EndedAt == nil || !span.EndedAt.Equal(end) {
+		t.Fatalf("model timing = %v / %v, want reported call interval", span.StartedAt, span.EndedAt)
+	}
+	if string(span.Input) != `{"messages":[{"role":"user","content":"actual request"}]}` ||
+		string(attempt.Request) != string(span.Input) {
+		t.Fatalf("model request = %s / %s", span.Input, attempt.Request)
+	}
+	if attempt.Provider != "openai-compatible" || !strings.Contains(string(attempt.Response), `"model":"real-model"`) {
+		t.Fatalf("model attempt identity lost: %#v", attempt)
+	}
+}
+
+func TestModelSpanMissingTimingAndInputStayUnknown(t *testing.T) {
+	ref := HarnessAttemptRef{RunID: "run-1", ID: "attempt-1"}
+	ev := harEvent(piharness.EventMessageCompleted, ref.RunID, "provider-1", 2, `{"text":"answer"}`)
+	span, attempt := (PostgresPiTraceStore{}).modelSpan(ref, ev)
+	if span.EndedAt != nil || attempt.EndedAt != nil {
+		t.Fatal("missing model timing fabricated a zero-duration call")
+	}
+	if len(span.Input) != 0 || len(attempt.Request) != 0 {
+		t.Fatal("missing model input fabricated an empty request")
+	}
+}
+
+func TestModelProjectionRejectsInvalidReportedTiming(t *testing.T) {
+	ref := HarnessAttemptRef{RunID: "run-1", ID: "attempt-1"}
+	for _, raw := range []string{
+		`{"text":"answer","started_at":"invalid"}`,
+		`{"text":"answer","started_at":"2026-10-28T12:00:02Z","ended_at":"2026-10-28T12:00:00Z"}`,
+	} {
+		ev := harEvent(piharness.EventMessageCompleted, ref.RunID, "provider-1", 2, raw)
+		if _, err := (PostgresPiTraceStore{}).deriveEvent(context.Background(), ref, ev); err == nil {
+			t.Fatalf("accepted invalid model timing %s", raw)
+		}
+	}
+}
+
+func TestModelEvidencePersistsAndUsageCannotAttachToPriorHarnessAttempt(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "model evidence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{ProjectID: project.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID, Content: "actual goal", AgentID: "browser-eval",
+		Model: event.ModelRef{Provider: "pi", Name: "model"}, IdempotencyKey: t.Name(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := piStore.AppendHarnessEvent(ctx, ref, harEvent(piharness.EventMessageCompleted, run.ID, ref.ProviderAttemptID, 1,
+		`{"text":"answer","input":{"messages":[{"role":"user","content":"actual goal"}]},"started_at":"2026-10-28T12:00:00Z","ended_at":"2026-10-28T12:00:02Z"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := piStore.AppendHarnessEvent(ctx, ref, harEvent(piharness.EventUsage, run.ID, ref.ProviderAttemptID, 2,
+		`{"input_tokens":10,"output_tokens":5,"cost_micros":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	details, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model *domain.Span
+	for i := range details.Spans {
+		if details.Spans[i].Kind == domain.SpanModel {
+			model = &details.Spans[i]
+		}
+	}
+	if model == nil || model.EndedAt == nil || model.EndedAt.Sub(model.StartedAt) != 2*time.Second ||
+		!strings.Contains(string(model.Input), "actual goal") {
+		t.Fatalf("durable model evidence = %#v", model)
+	}
+	if len(details.Usage) != 1 || details.Usage[0].InputTokens != 10 ||
+		!strings.Contains(string(details.Usage[0].Details), `"cost_micros": 0`) {
+		t.Fatalf("durable usage = %#v", details.Usage)
+	}
+	if _, err := piStore.StartRun(ctx, command); !errors.Is(err, postgres.ErrRunAlreadyTerminal) {
+		t.Fatalf("redelivery must reconcile instead of allocating another attempt: %v", err)
+	}
+}
 
 func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
@@ -493,7 +659,7 @@ func TestPostgresPiTraceStoreAssociatesObservationsWithExactToolCall(t *testing.
 }
 
 func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t *testing.T) {
-	ctx, _, store := newRuntimePostgresStore(t)
+	ctx, pool, store := newRuntimePostgresStore(t)
 	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi invalid observation association"})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -534,9 +700,17 @@ func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t
 		t.Fatal("append unknown observation tool call = nil, want error")
 	}
 
-	foreign, err := store.BeginHarnessAttempt(ctx, run.ID, "foreign-provider-attempt")
-	if err != nil {
-		t.Fatalf("begin foreign harness attempt: %v", err)
+	// A foreign historical attempt is deliberately injected to test association
+	// validation; the production claim API now forbids allocating a second one.
+	foreign := postgres.HarnessAttempt{
+		ID: "hat_foreign", RunID: run.ID, AttemptNumber: 2,
+		ProviderAttemptID: "foreign-provider-attempt",
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO harness_attempts
+		(id, run_id, attempt_number, provider_attempt_id, status, started_at)
+		VALUES ($1, $2, $3, $4, 'active', now())`,
+		foreign.ID, foreign.RunID, foreign.AttemptNumber, foreign.ProviderAttemptID); err != nil {
+		t.Fatalf("inject foreign historical attempt: %v", err)
 	}
 	foreignRef := HarnessAttemptRef{
 		ID:                foreign.ID,

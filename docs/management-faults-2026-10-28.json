@@ -1,0 +1,4481 @@
+{
+  "schema": "agenttrace.management-faults.v1",
+  "project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+  "langfuse_project_id": "agenttrace-native-project",
+  "checks": {
+    "schema-fault-injection": {
+      "status": "skipped",
+      "reason": "Not authorized or executed in this owned-runtime-only fault workload."
+    },
+    "kafka-pause": {
+      "status": "skipped",
+      "reason": "Not authorized or executed in this owned-runtime-only fault workload."
+    },
+    "redis-outage": {
+      "status": "skipped",
+      "reason": "Not authorized or executed in this owned-runtime-only fault workload."
+    },
+    "finite-fault-preflight": {
+      "status": "passed",
+      "evidence": {
+        "database_scope": "agenttrace_test_management_acceptance_20261028",
+        "runtime_workers": [
+          "acceptance-runtime-a-20261028",
+          "acceptance-runtime-b-20261028"
+        ],
+        "runtime_id": "pi",
+        "signals_authorized": true
+      }
+    },
+    "immutable-registry-bootstrap": {
+      "status": "passed",
+      "evidence": {
+        "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+        "harness_id": "ph_91705cf3e8a4f2ded8a55e507c6f5ead",
+        "skill_version_id": "sv_fb6fcb0bfe2202a191318a7c507c239d",
+        "runtime_ids": [
+          "pi",
+          "claude-code",
+          "codex"
+        ]
+      }
+    },
+    "concurrent-real-sdk-load": {
+      "status": "passed",
+      "evidence": {
+        "run_count": 4,
+        "run_ids": [
+          "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "run_0d9316ea5ebb8784d82ad43e8336528b"
+        ],
+        "runtime_owners": [
+          "acceptance-runtime-a-20261028",
+          "acceptance-runtime-b-20261028"
+        ]
+      }
+    },
+    "active-drain-cancel-rebalance": {
+      "status": "passed",
+      "evidence": {
+        "first_owner_assignments": [
+          {
+            "attempt_id": "hat_0aab4c9575ae480b0a520571e5ea9313",
+            "runtime_worker_id": "acceptance-runtime-a-20261028",
+            "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+            "state": "active",
+            "fencing_token": 2,
+            "sdk_started": true
+          }
+        ],
+        "drained_in_use": 1,
+        "cancel_observed_seconds": 0.529366416000002,
+        "second_owner_assignments": [
+          {
+            "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+            "state": "released",
+            "fencing_token": 2,
+            "sdk_started": true
+          },
+          {
+            "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+            "state": "released",
+            "fencing_token": 2,
+            "sdk_started": true
+          }
+        ],
+        "run_count": 2,
+        "run_ids": [
+          "run_5830b690e73ed117408ce164b9e2a967",
+          "run_bbbc4b0b9c36e0c4aacc027fbd96ef66"
+        ]
+      }
+    },
+    "owned-crash-after-external-effect": {
+      "status": "passed",
+      "evidence": {
+        "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+        "conversation_id": "conv_e19d00c041c2a5ae3c04af778c3ee195",
+        "runtime_worker_id": "acceptance-runtime-a-20261028",
+        "process_identity": {
+          "pid": 70286,
+          "ppid": 69648,
+          "started": "Wed Oct 28 21:40:31 2026"
+        },
+        "signal": "SIGKILL",
+        "assignment_before": {
+          "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "active",
+          "fencing_token": 2,
+          "sdk_started": true
+        },
+        "browser_asserted_text": "Signed in: fault-4e680690616a@example.test",
+        "screenshot_bytes": 17886,
+        "screenshot_sha256": "803ca242e6a79be93db054f253eec929ac4cab7b0dd3b8609d76d20c99b2de49",
+        "external_effects": "uncertain; operator review required",
+        "signal_sent": true,
+        "recovery": {
+          "status": "failed",
+          "error_code": "execution_lost",
+          "environment_state": "needs_review",
+          "fencing_token": 3,
+          "attempt_status": "lost",
+          "attempt_count": 1,
+          "assignment_state": "expired",
+          "lease_state": "expired"
+        },
+        "survivor": {
+          "run_count": 1,
+          "run_ids": [
+            "run_05cf5b672ba3ba29a826ba696583be82"
+          ]
+        },
+        "recovery_after_survivor_work": {
+          "status": "failed",
+          "error_code": "execution_lost",
+          "environment_state": "needs_review",
+          "fencing_token": 3,
+          "attempt_status": "lost",
+          "attempt_count": 1,
+          "assignment_state": "expired",
+          "lease_state": "expired"
+        }
+      }
+    },
+    "phase3-actual-measurements": {
+      "status": "passed",
+      "evidence": {
+        "elapsed_seconds": 276.339491792,
+        "sample_count": 120,
+        "scope": "DB connections include all sessions in selected test DB, including this read-only probe. Queue/lease/cancel measurements include only scenario-created runs. RSS includes selected child trees; overlapping trees are not summed.",
+        "per_attempt": [
+          {
+            "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-a-20261028",
+            "queue_seconds": 4.122294,
+            "sdk_queue_seconds": 4.1625,
+            "lease_seconds": 26.864608,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "queue_seconds": 0.206939,
+            "sdk_queue_seconds": 0.271615,
+            "lease_seconds": 37.76032,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-a-20261028",
+            "queue_seconds": 0.076292,
+            "sdk_queue_seconds": 0.148043,
+            "lease_seconds": 42.213844,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "queue_seconds": 37.965469,
+            "sdk_queue_seconds": 37.9769,
+            "lease_seconds": 24.103057,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+            "status": "cancelled",
+            "runtime_worker_id": "acceptance-runtime-a-20261028",
+            "queue_seconds": 5.87667,
+            "sdk_queue_seconds": 5.971538,
+            "lease_seconds": 16.173572,
+            "cancel_seconds": 0.240357
+          },
+          {
+            "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "queue_seconds": 0.237384,
+            "sdk_queue_seconds": 0.29385,
+            "lease_seconds": 27.605494,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "queue_seconds": 28.863795,
+            "sdk_queue_seconds": 28.88548,
+            "lease_seconds": 25.74035,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+            "status": "failed",
+            "runtime_worker_id": "acceptance-runtime-a-20261028",
+            "queue_seconds": 0.751532,
+            "sdk_queue_seconds": 0.810119,
+            "lease_seconds": 81.776425,
+            "cancel_seconds": null
+          },
+          {
+            "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+            "status": "succeeded",
+            "runtime_worker_id": "acceptance-runtime-b-20261028",
+            "queue_seconds": 16.529054,
+            "sdk_queue_seconds": 16.588943,
+            "lease_seconds": 28.274731,
+            "cancel_seconds": null
+          }
+        ],
+        "queue_seconds": {
+          "count": 9,
+          "min": 0.076292,
+          "p50": 4.122294,
+          "p95": 37.965469,
+          "max": 37.965469
+        },
+        "sdk_queue_seconds": {
+          "count": 9,
+          "min": 0.148043,
+          "p50": 4.1625,
+          "p95": 37.9769,
+          "max": 37.9769
+        },
+        "lease_seconds": {
+          "count": 9,
+          "min": 16.173572,
+          "p50": 27.605494,
+          "p95": 81.776425,
+          "max": 81.776425
+        },
+        "cancel_seconds": {
+          "count": 1,
+          "min": 0.240357,
+          "p50": 0.240357,
+          "p95": 0.240357,
+          "max": 0.240357
+        },
+        "database_connections": {
+          "count": 120,
+          "min": 16.0,
+          "p50": 19.0,
+          "p95": 19.0,
+          "max": 19.0
+        },
+        "process_tree_rss_kib": {
+          "70286": {
+            "count": 89,
+            "min": 19264.0,
+            "p50": 207696.0,
+            "p95": 294832.0,
+            "max": 318896.0
+          },
+          "70287": {
+            "count": 120,
+            "min": 19408.0,
+            "p50": 151168.0,
+            "p95": 240112.0,
+            "max": 245840.0
+          }
+        },
+        "durable_transport_and_lease_evidence": {
+          "inbox": [
+            {
+              "event_id": "evt_4281975a3ddf1b728c743962a9a89871",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "received_at": "2026-10-28T21:40:39.421168+08:00",
+              "processed_at": "2026-10-28T21:41:06.309617+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_2ad776b167b207864800bcea840918ba",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "received_at": "2026-10-28T21:42:03.542766+08:00",
+              "processed_at": "2026-10-28T21:42:31.165665+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_a00d70a9e5e94d35a6ff5bc3e0f0a4d9:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "received_at": "2026-10-28T21:45:07.84218+08:00",
+              "processed_at": "2026-10-28T21:45:07.84218+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_1987e343fc06ab4c500792b24eccf552:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "received_at": "2026-10-28T21:41:06.591767+08:00",
+              "processed_at": "2026-10-28T21:41:06.591767+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_c540476c776000f59913e2c8a1c13318",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "received_at": "2026-10-28T21:41:45.382042+08:00",
+              "processed_at": "2026-10-28T21:42:01.575126+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_b8adcc769d2fd243c3ee392a6479cd2b",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "received_at": "2026-10-28T21:42:31.170164+08:00",
+              "processed_at": "2026-10-28T21:42:56.97502+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_b68a73fb97cc403185cec9ecb81943dc:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "received_at": "2026-10-28T21:41:13.586543+08:00",
+              "processed_at": "2026-10-28T21:41:13.586543+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_7dda7207d98e185b29ec9654a5041da7",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "received_at": "2026-10-28T21:40:35.343216+08:00",
+              "processed_at": "2026-10-28T21:41:17.568168+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_99d5ede02e465298d50679485f4ef9d1:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "received_at": "2026-10-28T21:41:18.021175+08:00",
+              "processed_at": "2026-10-28T21:41:18.021175+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_451c8422feca6023fccde56e1437936d:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "received_at": "2026-10-28T21:42:31.586662+08:00",
+              "processed_at": "2026-10-28T21:42:31.586662+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_90af0cc047396431b742c015c065265c",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "received_at": "2026-10-28T21:42:59.104459+08:00",
+              "processed_at": "2026-10-28T21:44:39.208296+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_261200b60c8db625e8787fe5e9790092",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "received_at": "2026-10-28T21:40:35.525133+08:00",
+              "processed_at": "2026-10-28T21:41:13.298958+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_563eb190b82345645da3e12cd97bf342",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "received_at": "2026-10-28T21:41:13.302797+08:00",
+              "processed_at": "2026-10-28T21:41:37.419302+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_b0a299f7205267c2300a547b5f0703be:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "received_at": "2026-10-28T21:41:37.836646+08:00",
+              "processed_at": "2026-10-28T21:41:37.836646+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_e94bf02ccff0f36157206968d575cee5:cancelled",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "received_at": "2026-10-28T21:42:01.769449+08:00",
+              "processed_at": "2026-10-28T21:42:01.769449+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "event_b67a7ad0e459a80117fad6c1d4b017d2:succeeded",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "received_at": "2026-10-28T21:42:57.362057+08:00",
+              "processed_at": "2026-10-28T21:42:57.362057+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "lease-lost:hat_4faf3a77d04a166185f2ae130398a73a",
+              "consumer": "agenttrace-management-exporter-acceptance",
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "received_at": "2026-10-28T21:44:21.095889+08:00",
+              "processed_at": "2026-10-28T21:44:21.095889+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            },
+            {
+              "event_id": "evt_a05d4700efc9ac39f4fa925aae217026",
+              "consumer": "agenttrace-runtime",
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "received_at": "2026-10-28T21:44:39.213349+08:00",
+              "processed_at": "2026-10-28T21:45:07.499279+08:00",
+              "claimed_until": null,
+              "claim_present": false
+            }
+          ],
+          "outbox": [
+            {
+              "event_id": "evt_261200b60c8db625e8787fe5e9790092",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "published_at": "2026-10-28T21:40:35.516924+08:00",
+              "broker_partition": 5,
+              "broker_offset": 0,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_7dda7207d98e185b29ec9654a5041da7",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "published_at": "2026-10-28T21:40:35.3347+08:00",
+              "broker_partition": 6,
+              "broker_offset": 0,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_4281975a3ddf1b728c743962a9a89871",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "published_at": "2026-10-28T21:40:35.335595+08:00",
+              "broker_partition": 0,
+              "broker_offset": 0,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_563eb190b82345645da3e12cd97bf342",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "published_at": "2026-10-28T21:40:35.518031+08:00",
+              "broker_partition": 5,
+              "broker_offset": 1,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_c540476c776000f59913e2c8a1c13318",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "published_at": "2026-10-28T21:41:39.584929+08:00",
+              "broker_partition": 1,
+              "broker_offset": 8,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_b0a299f7205267c2300a547b5f0703be:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "published_at": "2026-10-28T21:41:37.835081+08:00",
+              "broker_partition": 7,
+              "broker_offset": 59,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_1987e343fc06ab4c500792b24eccf552:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "published_at": "2026-10-28T21:41:06.587286+08:00",
+              "broker_partition": 6,
+              "broker_offset": 111,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_b68a73fb97cc403185cec9ecb81943dc:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "published_at": "2026-10-28T21:41:13.585327+08:00",
+              "broker_partition": 3,
+              "broker_offset": 59,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_99d5ede02e465298d50679485f4ef9d1:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "published_at": "2026-10-28T21:41:18.019239+08:00",
+              "broker_partition": 7,
+              "broker_offset": 43,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_e94bf02ccff0f36157206968d575cee5:cancelled",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "published_at": "2026-10-28T21:42:01.768204+08:00",
+              "broker_partition": 4,
+              "broker_offset": 51,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_cca3ec6daae103a8be858cb93cf79c37",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "published_at": "2026-10-28T21:42:01.337463+08:00",
+              "broker_partition": 4,
+              "broker_offset": 48,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_2ad776b167b207864800bcea840918ba",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "published_at": "2026-10-28T21:42:03.518845+08:00",
+              "broker_partition": 0,
+              "broker_offset": 1,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_b8adcc769d2fd243c3ee392a6479cd2b",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "published_at": "2026-10-28T21:42:02.518614+08:00",
+              "broker_partition": 6,
+              "broker_offset": 1,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "lease-lost:hat_4faf3a77d04a166185f2ae130398a73a",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "published_at": "2026-10-28T21:44:21.091904+08:00",
+              "broker_partition": 4,
+              "broker_offset": 78,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_a05d4700efc9ac39f4fa925aae217026",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "published_at": "2026-10-28T21:44:22.772913+08:00",
+              "broker_partition": 5,
+              "broker_offset": 2,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_451c8422feca6023fccde56e1437936d:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "published_at": "2026-10-28T21:42:31.58552+08:00",
+              "broker_partition": 0,
+              "broker_offset": 93,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_a00d70a9e5e94d35a6ff5bc3e0f0a4d9:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "published_at": "2026-10-28T21:45:07.83947+08:00",
+              "broker_partition": 2,
+              "broker_offset": 56,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "event_b67a7ad0e459a80117fad6c1d4b017d2:succeeded",
+              "topic": "agenttrace.run.events.v1",
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "published_at": "2026-10-28T21:42:57.360462+08:00",
+              "broker_partition": 0,
+              "broker_offset": 112,
+              "attempt_count": 0
+            },
+            {
+              "event_id": "evt_90af0cc047396431b742c015c065265c",
+              "topic": "agenttrace.run.commands.v1",
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "published_at": "2026-10-28T21:42:58.519656+08:00",
+              "broker_partition": 3,
+              "broker_offset": 8,
+              "attempt_count": 0
+            }
+          ],
+          "leases": [
+            {
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "attempt_id": "hat_531b003bbd64f840d63d4813e4cab980",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:40:39.432176+08:00",
+              "renewed_at": "2026-10-28T21:40:59.473253+08:00",
+              "expires_at": "2026-10-28T21:41:29.47697+08:00"
+            },
+            {
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "attempt_id": "hat_5f9b4777e48971f9f51b5ef3b652c44f",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:40:35.532361+08:00",
+              "renewed_at": "2026-10-28T21:41:05.595786+08:00",
+              "expires_at": "2026-10-28T21:41:35.601672+08:00"
+            },
+            {
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "attempt_id": "hat_1fe04cf800023d934b685bee4991c071",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:40:35.349939+08:00",
+              "renewed_at": "2026-10-28T21:41:15.420418+08:00",
+              "expires_at": "2026-10-28T21:41:45.422895+08:00"
+            },
+            {
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "attempt_id": "hat_e0f3c91f772c2351f07cd7893080b7f7",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:41:13.304592+08:00",
+              "renewed_at": "2026-10-28T21:41:33.31599+08:00",
+              "expires_at": "2026-10-28T21:42:03.337468+08:00"
+            },
+            {
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "attempt_id": "hat_0aab4c9575ae480b0a520571e5ea9313",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:41:45.388094+08:00",
+              "renewed_at": "2026-10-28T21:41:55.482303+08:00",
+              "expires_at": "2026-10-28T21:42:25.484711+08:00"
+            },
+            {
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:42:03.546126+08:00",
+              "renewed_at": "2026-10-28T21:42:23.58766+08:00",
+              "expires_at": "2026-10-28T21:42:53.589648+08:00"
+            },
+            {
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:42:31.219879+08:00",
+              "renewed_at": "2026-10-28T21:42:51.243082+08:00",
+              "expires_at": "2026-10-28T21:43:21.248003+08:00"
+            },
+            {
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "expired",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:42:59.110676+08:00",
+              "renewed_at": "2026-10-28T21:43:49.169464+08:00",
+              "expires_at": "2026-10-28T21:44:19.171171+08:00"
+            },
+            {
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "attempt_id": "hat_e9ec65161615fef74cc9379379a4cdfd",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "acquired_at": "2026-10-28T21:44:39.219756+08:00",
+              "renewed_at": "2026-10-28T21:44:59.280005+08:00",
+              "expires_at": "2026-10-28T21:45:29.366725+08:00"
+            }
+          ],
+          "assignments": [
+            {
+              "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+              "attempt_id": "hat_1fe04cf800023d934b685bee4991c071",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:40:35.349939+08:00",
+              "released_at": "2026-10-28T21:41:17.563783+08:00",
+              "sdk_started_at": "2026-10-28T21:40:35.42169+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+              "attempt_id": "hat_e0f3c91f772c2351f07cd7893080b7f7",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:41:13.304592+08:00",
+              "released_at": "2026-10-28T21:41:37.407649+08:00",
+              "sdk_started_at": "2026-10-28T21:41:13.316023+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+              "attempt_id": "hat_0aab4c9575ae480b0a520571e5ea9313",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:41:45.388094+08:00",
+              "released_at": "2026-10-28T21:42:01.561666+08:00",
+              "sdk_started_at": "2026-10-28T21:41:45.482962+08:00",
+              "attempt_status": "cancelled"
+            },
+            {
+              "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+              "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:42:03.546126+08:00",
+              "released_at": "2026-10-28T21:42:31.15162+08:00",
+              "sdk_started_at": "2026-10-28T21:42:03.602592+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+              "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:42:31.219879+08:00",
+              "released_at": "2026-10-28T21:42:56.960229+08:00",
+              "sdk_started_at": "2026-10-28T21:42:31.241564+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+              "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "expired",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:42:59.110676+08:00",
+              "released_at": "2026-10-28T21:44:20.887101+08:00",
+              "sdk_started_at": "2026-10-28T21:42:59.169263+08:00",
+              "attempt_status": "lost"
+            },
+            {
+              "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+              "attempt_id": "hat_e9ec65161615fef74cc9379379a4cdfd",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:44:39.219756+08:00",
+              "released_at": "2026-10-28T21:45:07.494487+08:00",
+              "sdk_started_at": "2026-10-28T21:44:39.279645+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+              "attempt_id": "hat_531b003bbd64f840d63d4813e4cab980",
+              "runtime_worker_id": "acceptance-runtime-a-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:40:39.432176+08:00",
+              "released_at": "2026-10-28T21:41:06.296784+08:00",
+              "sdk_started_at": "2026-10-28T21:40:39.472382+08:00",
+              "attempt_status": "succeeded"
+            },
+            {
+              "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+              "attempt_id": "hat_5f9b4777e48971f9f51b5ef3b652c44f",
+              "runtime_worker_id": "acceptance-runtime-b-20261028",
+              "state": "released",
+              "fencing_token": 2,
+              "assigned_at": "2026-10-28T21:40:35.532361+08:00",
+              "released_at": "2026-10-28T21:41:13.292681+08:00",
+              "sdk_started_at": "2026-10-28T21:40:35.597037+08:00",
+              "attempt_status": "succeeded"
+            }
+          ]
+        },
+        "existing_api_tree_rss_kib": {
+          "count": 120,
+          "min": 29584.0,
+          "p50": 31952.0,
+          "p95": 33344.0,
+          "max": 33344.0
+        },
+        "total_model_tokens": 300455
+      }
+    },
+    "healthy-conversation-delete": {
+      "status": "passed",
+      "evidence": [
+        {
+          "conversation_id": "conv_a4c856cebafe0100abe1e634116f11f0",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_84c2a4e94104e0ad3d23a08c2de0a23f",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_7d04d57bbd5beca0350ea76cf04f2a64",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_6cb7ba8fc7f67a7477c32184dfc743de",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_07cfc2b291124f478ddae1c342e580c6",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_822e575c5efb71b4d5576091f2a74070",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_83d8d54db8881d1079ab191970342451",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        },
+        {
+          "conversation_id": "conv_59851aa168036cb9d24854761aa06d82",
+          "state": "deleted",
+          "messages": 0,
+          "environments": 0
+        }
+      ]
+    }
+  },
+  "runs": {
+    "load-0": {
+      "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+      "conversation_id": "conv_a4c856cebafe0100abe1e634116f11f0",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35139,
+      "screenshots": [
+        {
+          "path": "run_ca99041a7e1b0fe6b15ceb04c973a047/obs_861efe3bc84e7821.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_ca99041a7e1b0fe6b15ceb04c973a047/obs_861efe3bc84e7821.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_ca99041a7e1b0fe6b15ceb04c973a047/exec_c290fd9b21468990_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_ca99041a7e1b0fe6b15ceb04c973a047/exec_c290fd9b21468990_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_1fe04cf800023d934b685bee4991c071",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35139,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "f2b225edfbb110bc148382eb5916e2c2db525eb054aec0c3bd192b6078601b0e",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "load-1": {
+      "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+      "conversation_id": "conv_84c2a4e94104e0ad3d23a08c2de0a23f",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35113,
+      "screenshots": [
+        {
+          "path": "run_b2c35aeedd9f9d67fa323f6f8e1934ee/obs_ea9e9c82ce290d3c.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_b2c35aeedd9f9d67fa323f6f8e1934ee/obs_ea9e9c82ce290d3c.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_b2c35aeedd9f9d67fa323f6f8e1934ee/exec_33082db57333a91c_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_b2c35aeedd9f9d67fa323f6f8e1934ee/exec_33082db57333a91c_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_531b003bbd64f840d63d4813e4cab980",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35113,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "ea0ec43febd5d8560c7226ca3b13a112478422e2112e8a5f2a1b1cfc5b9915e7",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "load-2": {
+      "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+      "conversation_id": "conv_7d04d57bbd5beca0350ea76cf04f2a64",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35098,
+      "screenshots": [
+        {
+          "path": "run_cdffcc1db75da7959deb2af0f6f283f7/obs_cfdb2623073ad498.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_cdffcc1db75da7959deb2af0f6f283f7/obs_cfdb2623073ad498.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_cdffcc1db75da7959deb2af0f6f283f7/exec_6a69956804a05a06_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_cdffcc1db75da7959deb2af0f6f283f7/exec_6a69956804a05a06_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_5f9b4777e48971f9f51b5ef3b652c44f",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35098,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "099c7ed56bf2ab638c9ab3c64e2dad3fff1c19051a6441d0be63c988d29384e0",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "load-3": {
+      "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+      "conversation_id": "conv_6cb7ba8fc7f67a7477c32184dfc743de",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 34996,
+      "screenshots": [
+        {
+          "path": "run_0d9316ea5ebb8784d82ad43e8336528b/obs_038b9e25b1391f9b.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_0d9316ea5ebb8784d82ad43e8336528b/obs_038b9e25b1391f9b.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_0d9316ea5ebb8784d82ad43e8336528b/exec_d1605f673f8b2893_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_0d9316ea5ebb8784d82ad43e8336528b/exec_d1605f673f8b2893_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_e0f3c91f772c2351f07cd7893080b7f7",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 34996,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "a29b609175b55047bf5e6565b6ddc1190c042d547d48ba480a6cadbfd24b776f",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "drain-cancel": {
+      "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+      "conversation_id": "conv_07cfc2b291124f478ddae1c342e580c6",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "d2aa4bd6a467662a1f10e814bc9f58c57ccaea478a64ddd82599b015d12308be",
+      "status": "cancelled",
+      "measured_total_tokens": 8925,
+      "measured_model_spans": 2,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "b3ae125c7f339e2ec9672ef754de3f0271ecf79c5f5aabfe4668dd983855a17a",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "rebalance-0": {
+      "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+      "conversation_id": "conv_822e575c5efb71b4d5576091f2a74070",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35147,
+      "screenshots": [
+        {
+          "path": "run_5830b690e73ed117408ce164b9e2a967/obs_4cd7bc9ce2e4aecf.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_5830b690e73ed117408ce164b9e2a967/obs_4cd7bc9ce2e4aecf.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_5830b690e73ed117408ce164b9e2a967/exec_94ce598d716f3ba0_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_5830b690e73ed117408ce164b9e2a967/exec_94ce598d716f3ba0_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35147,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "fb9c84f9ab062911fa2eed8602c428c89458915f5b9d7edd1abe128a20f35961",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "rebalance-1": {
+      "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+      "conversation_id": "conv_83d8d54db8881d1079ab191970342451",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35111,
+      "screenshots": [
+        {
+          "path": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66/obs_92787455f861cdb3.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66/obs_92787455f861cdb3.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66/exec_9480f87182745660_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66/exec_9480f87182745660_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35111,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "c0d0d197faad56f58c457f650c92c07f0f93cdfed87c418fe831aad51344b457",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    },
+    "post-sideeffect-crash": {
+      "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+      "conversation_id": "conv_e19d00c041c2a5ae3c04af778c3ee195",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "11f0523f17cd08de665b882ef1c0edc9096a747f51a0819227fb4b56e8502657",
+      "measured_total_tokens": 45790,
+      "measured_model_spans": 5,
+      "browser_succeeded_spans": 5,
+      "trace_sha256": "4ef3beefb8288bb0669fae63069852f34de168755f9d1e393ad419df597d5bac",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52"
+    },
+    "post-crash-survivor": {
+      "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+      "conversation_id": "conv_59851aa168036cb9d24854761aa06d82",
+      "runtime_id": "pi",
+      "harness_version_id": "hv_20329b19558f2c84642e9c0421462896",
+      "workload_sha256": "3e40a5f8ca49e963df1ada479f90b45a1b435473199eb2c803a1a4aa47f7663c",
+      "status": "succeeded",
+      "model_spans": 4,
+      "total_tokens": 35136,
+      "screenshots": [
+        {
+          "path": "run_05cf5b672ba3ba29a826ba696583be82/obs_7a30a7a323bce5cd.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_05cf5b672ba3ba29a826ba696583be82/obs_7a30a7a323bce5cd.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_05cf5b672ba3ba29a826ba696583be82/exec_2220d4da90c98395_0.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        },
+        {
+          "path": "run_05cf5b672ba3ba29a826ba696583be82/exec_2220d4da90c98395_1.png",
+          "bytes": 20785,
+          "sha256": "8a7a3c20143448edbad939101bea169998dec8bb848edf4fb41e9aea466c9d8e"
+        }
+      ],
+      "asserted_text": null,
+      "assignments": [
+        {
+          "attempt_id": "hat_e9ec65161615fef74cc9379379a4cdfd",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+          "state": "released",
+          "fencing_token": 2,
+          "sdk_started": true
+        }
+      ],
+      "measured_total_tokens": 35136,
+      "measured_model_spans": 4,
+      "browser_succeeded_spans": null,
+      "trace_sha256": "159b638af551af1f7c9137044603015a6b5924d0db57f09fa95c0d78abd33733",
+      "snapshot_sha256": "41976709f5507930723a0d6382af9a5ff20dff24e65842d9114378cb44a27f52",
+      "browser_action_count_limit": "Exact trace count unavailable after authorized healthy Conversation deletion; pre-delete browser evidence, PNG hashes, model tokens and trace digest retained."
+    }
+  },
+  "conversations": [
+    {
+      "id": "conv_a4c856cebafe0100abe1e634116f11f0",
+      "label": "load-0"
+    },
+    {
+      "id": "conv_84c2a4e94104e0ad3d23a08c2de0a23f",
+      "label": "load-1"
+    },
+    {
+      "id": "conv_7d04d57bbd5beca0350ea76cf04f2a64",
+      "label": "load-2"
+    },
+    {
+      "id": "conv_6cb7ba8fc7f67a7477c32184dfc743de",
+      "label": "load-3"
+    },
+    {
+      "id": "conv_07cfc2b291124f478ddae1c342e580c6",
+      "label": "active-drain"
+    },
+    {
+      "id": "conv_822e575c5efb71b4d5576091f2a74070",
+      "label": "rebalance-0"
+    },
+    {
+      "id": "conv_83d8d54db8881d1079ab191970342451",
+      "label": "rebalance-1"
+    },
+    {
+      "id": "conv_e19d00c041c2a5ae3c04af778c3ee195",
+      "label": "post-sideeffect-crash"
+    },
+    {
+      "id": "conv_59851aa168036cb9d24854761aa06d82",
+      "label": "post-crash-survivor"
+    }
+  ],
+  "limitations": [
+    "Finite local workload, not a production soak or horizontal browser-store validation.",
+    "Parent owns full tests, Langfuse UI/RBAC, identity and final privacy acceptance.",
+    "Schema migration faults, Kafka pause and Redis outage were not injected or verified.",
+    "No operator performance budgets were supplied; timings are measurements, not capacity approval.",
+    "Existing API RSS is inspection-only under its verified native owner, not a private owned signal target.",
+    "Killed runtime is not restarted. Orphan SDK/browser children may remain; parent must inspect owned descendants. Crash Conversation retained for review; no automatic review/reset/delete.",
+    "Source/build provenance changed during this run; before/after hashes are recorded.",
+    "Supervisor privacy-ready flag referred to the prior authorized Node build, identified by release_identity Node hashes. Newly discovered public model-input/premarker-text password fixes and control-close-across-TTL fixes were not deployed or validated by this scenario. No latest-privacy acceptance is claimed.",
+    "Actual four-Run submission observed peak three simultaneous Assignments across both owners; this is not proof of sustained four-slot saturation.",
+    "Post-cleanup verified all recorded owned Node descendants already exited; no orphan-cleanup signal was required and no protected service was signalled."
+  ],
+  "samples": [
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 0.042,
+      "process_tree_rss_kib": {
+        "70286": 19264,
+        "70287": 19408
+      },
+      "existing_api_tree_rss_kib": 30528
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 2.47,
+      "process_tree_rss_kib": {
+        "70286": 19568,
+        "70287": 19760
+      },
+      "existing_api_tree_rss_kib": 30752
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 2,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 4.93,
+      "process_tree_rss_kib": {
+        "70286": 245232,
+        "70287": 245648
+      },
+      "existing_api_tree_rss_kib": 30816
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 7.376,
+      "process_tree_rss_kib": {
+        "70286": 318896,
+        "70287": 245840
+      },
+      "existing_api_tree_rss_kib": 30816
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 9.704,
+      "process_tree_rss_kib": {
+        "70286": 318896,
+        "70287": 245840
+      },
+      "existing_api_tree_rss_kib": 30752
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 12.099,
+      "process_tree_rss_kib": {
+        "70286": 282592,
+        "70287": 202256
+      },
+      "existing_api_tree_rss_kib": 30752
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 14.608,
+      "process_tree_rss_kib": {
+        "70286": 294832,
+        "70287": 201408
+      },
+      "existing_api_tree_rss_kib": 30768
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 17.036,
+      "process_tree_rss_kib": {
+        "70286": 301040,
+        "70287": 201408
+      },
+      "existing_api_tree_rss_kib": 30768
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 19.382,
+      "process_tree_rss_kib": {
+        "70286": 292080,
+        "70287": 213920
+      },
+      "existing_api_tree_rss_kib": 30784
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 21.603,
+      "process_tree_rss_kib": {
+        "70286": 271872,
+        "70287": 213056
+      },
+      "existing_api_tree_rss_kib": 30736
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 23.686,
+      "process_tree_rss_kib": {
+        "70286": 283488,
+        "70287": 213072
+      },
+      "existing_api_tree_rss_kib": 30736
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 26.042,
+      "process_tree_rss_kib": {
+        "70286": 287456,
+        "70287": 213200
+      },
+      "existing_api_tree_rss_kib": 30736
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 28.516,
+      "process_tree_rss_kib": {
+        "70286": 288176,
+        "70287": 213552
+      },
+      "existing_api_tree_rss_kib": 30736
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 3,
+      "active_assignments": 3,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 30.999,
+      "process_tree_rss_kib": {
+        "70286": 307200,
+        "70287": 214976
+      },
+      "existing_api_tree_rss_kib": 30736
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 33.153,
+      "process_tree_rss_kib": {
+        "70286": 211680,
+        "70287": 212336
+      },
+      "existing_api_tree_rss_kib": 30608
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 35.172,
+      "process_tree_rss_kib": {
+        "70286": 211680,
+        "70287": 212768
+      },
+      "existing_api_tree_rss_kib": 30608
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 37.65,
+      "process_tree_rss_kib": {
+        "70286": 228624,
+        "70287": 230848
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 39.657,
+      "process_tree_rss_kib": {
+        "70286": 228640,
+        "70287": 231184
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 42.05,
+      "process_tree_rss_kib": {
+        "70286": 228640,
+        "70287": 217408
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 2,
+      "active_assignments": 2,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028",
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 44.498,
+      "process_tree_rss_kib": {
+        "70286": 229120,
+        "70287": 225664
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 46.823,
+      "process_tree_rss_kib": {
+        "70286": 141616,
+        "70287": 230160
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 49.203,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 221008
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 2,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 51.632,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 222592
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 54.079,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 222592
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 56.255,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 222736
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 58.343,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 240096
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 60.706,
+      "process_tree_rss_kib": {
+        "70286": 141632,
+        "70287": 240112
+      },
+      "existing_api_tree_rss_kib": 30576
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 63.226,
+      "process_tree_rss_kib": {
+        "70286": 141264,
+        "70287": 236272
+      },
+      "existing_api_tree_rss_kib": 29968
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 2,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 65.227,
+      "process_tree_rss_kib": {
+        "70286": 141264,
+        "70287": 144960
+      },
+      "existing_api_tree_rss_kib": 29984
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 67.243,
+      "process_tree_rss_kib": {
+        "70286": 140880,
+        "70287": 143216
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 69.438,
+      "process_tree_rss_kib": {
+        "70286": 140880,
+        "70287": 143328
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 71.606,
+      "process_tree_rss_kib": {
+        "70286": 140880,
+        "70287": 143392
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 73.829,
+      "process_tree_rss_kib": {
+        "70286": 213968,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 75.944,
+      "process_tree_rss_kib": {
+        "70286": 213968,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 78.25,
+      "process_tree_rss_kib": {
+        "70286": 214144,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 80.53,
+      "process_tree_rss_kib": {
+        "70286": 214544,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 82.628,
+      "process_tree_rss_kib": {
+        "70286": 204816,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 84.863,
+      "process_tree_rss_kib": {
+        "70286": 204912,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32096
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 87.884,
+      "process_tree_rss_kib": {
+        "70286": 220544,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32240
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 89.974,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 143408
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 92.39,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 215568
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 94.781,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 215568
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 97.18,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 215808
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 99.546,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 218656
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 101.939,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 217776
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 104.364,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 222656
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 106.738,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 222672
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 109.141,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 222672
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 111.482,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 239872
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 113.816,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 239872
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 116.241,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 240016
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 118.707,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 215184
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 121.074,
+      "process_tree_rss_kib": {
+        "70286": 145344,
+        "70287": 221152
+      },
+      "existing_api_tree_rss_kib": 32256
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 123.468,
+      "process_tree_rss_kib": {
+        "70286": 145184,
+        "70287": 221584
+      },
+      "existing_api_tree_rss_kib": 30752
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 125.481,
+      "process_tree_rss_kib": {
+        "70286": 145184,
+        "70287": 229312
+      },
+      "existing_api_tree_rss_kib": 30752
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 127.807,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 222704
+      },
+      "existing_api_tree_rss_kib": 29600
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 130.276,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 218032
+      },
+      "existing_api_tree_rss_kib": 29584
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 132.626,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 218048
+      },
+      "existing_api_tree_rss_kib": 29584
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 134.988,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 220336
+      },
+      "existing_api_tree_rss_kib": 29584
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 137.436,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 220352
+      },
+      "existing_api_tree_rss_kib": 29600
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 139.77,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 220624
+      },
+      "existing_api_tree_rss_kib": 29600
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 142.122,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 237776
+      },
+      "existing_api_tree_rss_kib": 29600
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 144.456,
+      "process_tree_rss_kib": {
+        "70286": 143872,
+        "70287": 149984
+      },
+      "existing_api_tree_rss_kib": 29600
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 146.523,
+      "process_tree_rss_kib": {
+        "70286": 195904,
+        "70287": 149984
+      },
+      "existing_api_tree_rss_kib": 31936
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 148.869,
+      "process_tree_rss_kib": {
+        "70286": 217376,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 151.092,
+      "process_tree_rss_kib": {
+        "70286": 217392,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 153.319,
+      "process_tree_rss_kib": {
+        "70286": 217680,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 155.567,
+      "process_tree_rss_kib": {
+        "70286": 207696,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 157.678,
+      "process_tree_rss_kib": {
+        "70286": 207696,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 159.969,
+      "process_tree_rss_kib": {
+        "70286": 207696,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 162.202,
+      "process_tree_rss_kib": {
+        "70286": 207696,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 164.407,
+      "process_tree_rss_kib": {
+        "70286": 207696,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 166.534,
+      "process_tree_rss_kib": {
+        "70286": 207744,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 168.673,
+      "process_tree_rss_kib": {
+        "70286": 207744,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 170.944,
+      "process_tree_rss_kib": {
+        "70286": 207744,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 173.069,
+      "process_tree_rss_kib": {
+        "70286": 207744,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 175.225,
+      "process_tree_rss_kib": {
+        "70286": 207760,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 177.509,
+      "process_tree_rss_kib": {
+        "70286": 207760,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 180.067,
+      "process_tree_rss_kib": {
+        "70286": 219040,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 182.266,
+      "process_tree_rss_kib": {
+        "70286": 221904,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 184.836,
+      "process_tree_rss_kib": {
+        "70286": 222016,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 187.031,
+      "process_tree_rss_kib": {
+        "70286": 222176,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31952
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 189.312,
+      "process_tree_rss_kib": {
+        "70286": 239248,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31968
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 191.757,
+      "process_tree_rss_kib": {
+        "70286": 239664,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31968
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 193.833,
+      "process_tree_rss_kib": {
+        "70286": 239664,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31984
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 196.198,
+      "process_tree_rss_kib": {
+        "70286": 239760,
+        "70287": 150000
+      },
+      "existing_api_tree_rss_kib": 31984
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 198.419,
+      "process_tree_rss_kib": {
+        "70286": 240688,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 31984
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 200.671,
+      "process_tree_rss_kib": {
+        "70286": 240688,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 19,
+      "active_database_connections": 2,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 203.254,
+      "process_tree_rss_kib": {
+        "70286": 241008,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 205.842,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 207.976,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 210.213,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 212.336,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 214.502,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 216.612,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 219.483,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 222.015,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 224.225,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 150016
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-a-20261028"
+      ],
+      "elapsed_seconds": 226.525,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149680
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 229.237,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149680
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 231.26,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149680
+      },
+      "existing_api_tree_rss_kib": 33088
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 233.754,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 235.845,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 238.193,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 240.603,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 242.971,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 1,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 245.37,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 149632
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 247.739,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 220704
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 250.134,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 220704
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 252.464,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 220784
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 254.919,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 223424
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 257.276,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 222384
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 259.669,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 222528
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 262.13,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 224400
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 264.453,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 224400
+      },
+      "existing_api_tree_rss_kib": 31344
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 266.784,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 224720
+      },
+      "existing_api_tree_rss_kib": 31328
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 269.045,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 241888
+      },
+      "existing_api_tree_rss_kib": 31328
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 271.398,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 241888
+      },
+      "existing_api_tree_rss_kib": 31328
+    },
+    {
+      "database_connections": 16,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 1,
+      "active_assignments": 1,
+      "runtime_owners": [
+        "acceptance-runtime-b-20261028"
+      ],
+      "elapsed_seconds": 273.805,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 242016
+      },
+      "existing_api_tree_rss_kib": 31328
+    },
+    {
+      "database_connections": 17,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 275.98,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 151168
+      },
+      "existing_api_tree_rss_kib": 31648
+    },
+    {
+      "database_connections": 17,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 278.192,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 151168
+      },
+      "existing_api_tree_rss_kib": 32112
+    },
+    {
+      "database_connections": 17,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 280.478,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 151200
+      },
+      "existing_api_tree_rss_kib": 32112
+    },
+    {
+      "database_connections": 17,
+      "active_database_connections": 1,
+      "queued_runs": 0,
+      "active_runs": 0,
+      "active_assignments": 0,
+      "runtime_owners": [],
+      "elapsed_seconds": 282.73,
+      "process_tree_rss_kib": {
+        "70286": null,
+        "70287": 151200
+      },
+      "existing_api_tree_rss_kib": 32112
+    }
+  ],
+  "requested_load_runs": 4,
+  "deadline_seconds": 900.0,
+  "release_identity": {
+    "source_sha": "645942d983c2c3cb8432209e484ffec86da392e9",
+    "dirty_diff_sha256": "2c7fe587fcdd3ab0a571ae39ac09e4b80bebc0d4816dbd4ac6e7bd63441040fe",
+    "source_tree_sha256": "356fbdcd818e31e9060cfc261206fff52c92942e9a5c03df7bdfec7dfb937373",
+    "source_file_count": 247,
+    "runtime_binary_sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430",
+    "node_dist_main_sha256": "981a97f0307af9f7ccdac5e3edd3fb34f33699899cf6810b02a5bc23c678f477",
+    "node_dist_mcp_sha256": "d594935340cc5dbb842e8ac692db5f2582aad03356bc942e7508738dde6b1a06",
+    "harness_sha256": "4369238e56ea125b836abe6b03c76d0ccfe0efaa0a0cdfc33ba71082e178180d",
+    "private_supervisor_sha256": "ab54a06318777c7003f3f33b7b4e4d3ddea3c1105e967795e221b9d25a66dcec"
+  },
+  "topology": {
+    "AGENTTRACE_PROJECT_ID": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+    "AGENTTRACE_API_URL": "http://127.0.0.1:8180",
+    "AGENTTRACE_WORKER_URL": "http://127.0.0.1:8110",
+    "AGENTTRACE_KAFKA_GROUP_ID": "agenttrace-management-runtime-acceptance",
+    "AGENTTRACE_KAFKA_BROKERS": "127.0.0.1:9192",
+    "AGENTTRACE_BROWSER_WORKER_CAPACITY": "4",
+    "AGENTTRACE_MANAGEMENT_IDENTITY_URL": "http://127.0.0.1:8125/management_identity.html",
+    "runtime_workers": [
+      "acceptance-runtime-a-20261028",
+      "acceptance-runtime-b-20261028"
+    ],
+    "runtime_concurrency_per_process": 2,
+    "browser_worker_id": "unset; canonical endpoint-derived shared provider",
+    "initial_runs": 4,
+    "database_scope": "agenttrace_test_management_acceptance_20261028",
+    "existing_stack_owner_pid": 49449,
+    "original_runtime_worker": "runtime-KDQDT6WYL9-51297-HSIIBS7I3NCRA2CXSPVSYQENRR"
+  },
+  "process_identity_before": {
+    "native_owner": {
+      "pid": 49449,
+      "ppid": 1,
+      "started": "Wed Oct 28 21:30:37 2026"
+    },
+    "existing_api": {
+      "pid": 51279,
+      "ppid": 51273,
+      "started": "Wed Oct 28 21:30:48 2026"
+    },
+    "original_runtime": {
+      "pid": 51297,
+      "ppid": 51284,
+      "started": "Wed Oct 28 21:30:49 2026"
+    },
+    "owned_supervisor": {
+      "pid": 69648,
+      "ppid": 69646,
+      "started": "Wed Oct 28 21:40:14 2026"
+    }
+  },
+  "deployed_stack_metadata": {
+    "api_binary_sha256": "825e29f47508065cbd7e226dfd8743cb08c9036b3bcd878d531a34d5d69cbd2e",
+    "original_runtime_binary_sha256": "64af5c5401f8a69069746d5b14da03d97836a7f069ea764a453f588f129d34c6",
+    "current_api_main_source_sha256": "f7fed2e5d8186153104e657f58a1829a318be9aa595c3f9a97d21f6a4aa380c6",
+    "api_build_metadata": "/var/folders/_v/fzkw57w55270qg2ytkvhgggr0000gn/T/go-build1158972036/b001/exe/agenttrace-api: go1.26.4\n\tpath\tgithub.com/Asukadaisiki/AI_Web_Testing/backend/cmd/agenttrace-api\n\tmod\tgithub.com/Asukadaisiki/AI_Web_Testing/backend\t(devel)\t\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.8.0\th1:TYPDoleBBme0xGSAX3/+NujXXtpZn9HBONkQC7IEZSo=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/klauspost/compress\tv1.18.4\th1:RPhnKRAQ4Fh8zU2FY/6ZFDwTVTxgJ/EMydqSTzE9a2c=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.25\th1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/twmb/franz-go\tv1.20.7\th1:P4MGSXJjjAPP3NRGPCks/Lrq+j+twWMVl1qYCVgNmWY=\n\tdep\tgithub.com/twmb/franz-go/pkg/kmsg\tv1.12.0\th1:CbatD7ers1KzDNgJqPbKOq0Bz/WLBdsTH75wgzeVaPc=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgolang.org/x/sync\tv0.17.0\th1:l60nONMj9l5drqw6jlhIELNv9I0A4OFgRsG9k2oT9Ug=\n\tdep\tgolang.org/x/text\tv0.29.0\th1:1neNs90w9YzJ9BocxfsQNHKuAT4pkghyXc4nhZ6sJvk=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tDefaultGODEBUG=containermaxprocs=0,cryptocustomrand=1,decoratemappings=0,tlssecpmlkem=0,tlssha1=1,updatemaxprocs=0,urlstrictcolons=0,x509sha256skid=0\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0",
+    "api_source_only_caveat": "Parent reports the latest SSE redaction and BaseContext graceful-shutdown edits are source-only. Existing API binary predates those edits; this scenario does not validate their deployment."
+  },
+  "preparation_verification": {
+    "observed_date": "2026-10-28",
+    "scope": "Preparation only, not actual real SDK fault workload acceptance.",
+    "private_supervisor_safety_tests": {
+      "command": "python3 -m unittest owned_fault_supervisor_test -v",
+      "passed": 7,
+      "exit_code": 0
+    },
+    "scoped_local_harness_tests": {
+      "command": "python3 -m unittest management_test management_faults_test composition_test run_test",
+      "passed": 33,
+      "exit_code": 0
+    },
+    "targeted_go_tests": {
+      "command": "go test ./cmd/agenttrace-runtime ./internal/piharness ./internal/runtime",
+      "exit_code": 0,
+      "cached": true
+    },
+    "private_runtime_build": {
+      "command": "go build -o /Users/bytedance/Library/Caches/agenttrace-management-acceptance-20261028/agenttrace-runtime-owned ./cmd/agenttrace-runtime",
+      "exit_code": 0,
+      "sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430"
+    },
+    "read_only_actual_test_db_query_validation": {
+      "validated": [
+        "inbox",
+        "outbox",
+        "leases",
+        "assignments"
+      ],
+      "scenario_runs_submitted": 0,
+      "signals_sent": false,
+      "empty_scenario_scope": true,
+      "exit_code": 0
+    },
+    "broad_local_discovery_observation": {
+      "command": "python3 -m unittest discover -s integration/local -p '*_test.py'",
+      "tests_run": 38,
+      "errors": 5,
+      "exit_code": 1,
+      "cause": "Concurrent infrastructure_faults.py stub raised NotImplementedError in the other agent's new tests. Those files were not modified by this work.",
+      "not_a_current_full_suite_pass": true
+    }
+  },
+  "started_at": "2026-10-28T13:40:15.619054+00:00",
+  "parent_idle_gate": {
+    "stable_idle_seconds": 15,
+    "original_runtime_worker": "runtime-KDQDT6WYL9-51297-HSIIBS7I3NCRA2CXSPVSYQENRR",
+    "original_runtime_pid": 51297
+  },
+  "catalog": [
+    {
+      "id": "pi",
+      "name": "Pi",
+      "model": {
+        "provider": "openai-compatible",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "model": {
+        "provider": "anthropic-compatible",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "model": {
+        "provider": "openai-responses",
+        "name": "glm-5.3-flash",
+        "reasoning_effort": "high"
+      },
+      "available": true
+    }
+  ],
+  "runtime_id": "pi",
+  "runtime_workers": [
+    {
+      "id": "acceptance-runtime-a-20261028",
+      "role": "runtime",
+      "project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+      "version": "agenttrace-runtime.v3",
+      "runtime_ids": [
+        "pi",
+        "claude-code",
+        "codex"
+      ],
+      "capacity": 2,
+      "in_use": 0,
+      "draining": false,
+      "alive": true,
+      "last_seen_at": "2026-10-28T21:40:32.140461+08:00"
+    },
+    {
+      "id": "acceptance-runtime-b-20261028",
+      "role": "runtime",
+      "project_id": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+      "version": "agenttrace-runtime.v3",
+      "runtime_ids": [
+        "pi",
+        "claude-code",
+        "codex"
+      ],
+      "capacity": 2,
+      "in_use": 0,
+      "draining": false,
+      "alive": true,
+      "last_seen_at": "2026-10-28T21:40:32.050509+08:00"
+    }
+  ],
+  "fault_injection": {
+    "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+    "conversation_id": "conv_e19d00c041c2a5ae3c04af778c3ee195",
+    "runtime_worker_id": "acceptance-runtime-a-20261028",
+    "process_identity": {
+      "pid": 70286,
+      "ppid": 69648,
+      "started": "Wed Oct 28 21:40:31 2026"
+    },
+    "signal": "SIGKILL",
+    "assignment_before": {
+      "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+      "runtime_worker_id": "acceptance-runtime-a-20261028",
+      "browser_worker_id": "browser-32bce3d4f3efda24dc125822",
+      "state": "active",
+      "fencing_token": 2,
+      "sdk_started": true
+    },
+    "browser_asserted_text": "Signed in: fault-4e680690616a@example.test",
+    "screenshot_bytes": 17886,
+    "screenshot_sha256": "803ca242e6a79be93db054f253eec929ac4cab7b0dd3b8609d76d20c99b2de49",
+    "external_effects": "uncertain; operator review required",
+    "signal_sent": true,
+    "recovery": {
+      "status": "failed",
+      "error_code": "execution_lost",
+      "environment_state": "needs_review",
+      "fencing_token": 3,
+      "attempt_status": "lost",
+      "attempt_count": 1,
+      "assignment_state": "expired",
+      "lease_state": "expired"
+    },
+    "survivor": {
+      "run_count": 1,
+      "run_ids": [
+        "run_05cf5b672ba3ba29a826ba696583be82"
+      ]
+    },
+    "recovery_after_survivor_work": {
+      "status": "failed",
+      "error_code": "execution_lost",
+      "environment_state": "needs_review",
+      "fencing_token": 3,
+      "attempt_status": "lost",
+      "attempt_count": 1,
+      "assignment_state": "expired",
+      "lease_state": "expired"
+    }
+  },
+  "measurements": {
+    "elapsed_seconds": 276.339491792,
+    "sample_count": 120,
+    "scope": "DB connections include all sessions in selected test DB, including this read-only probe. Queue/lease/cancel measurements include only scenario-created runs. RSS includes selected child trees; overlapping trees are not summed.",
+    "per_attempt": [
+      {
+        "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-a-20261028",
+        "queue_seconds": 4.122294,
+        "sdk_queue_seconds": 4.1625,
+        "lease_seconds": 26.864608,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-b-20261028",
+        "queue_seconds": 0.206939,
+        "sdk_queue_seconds": 0.271615,
+        "lease_seconds": 37.76032,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-a-20261028",
+        "queue_seconds": 0.076292,
+        "sdk_queue_seconds": 0.148043,
+        "lease_seconds": 42.213844,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-b-20261028",
+        "queue_seconds": 37.965469,
+        "sdk_queue_seconds": 37.9769,
+        "lease_seconds": 24.103057,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+        "status": "cancelled",
+        "runtime_worker_id": "acceptance-runtime-a-20261028",
+        "queue_seconds": 5.87667,
+        "sdk_queue_seconds": 5.971538,
+        "lease_seconds": 16.173572,
+        "cancel_seconds": 0.240357
+      },
+      {
+        "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-b-20261028",
+        "queue_seconds": 0.237384,
+        "sdk_queue_seconds": 0.29385,
+        "lease_seconds": 27.605494,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-b-20261028",
+        "queue_seconds": 28.863795,
+        "sdk_queue_seconds": 28.88548,
+        "lease_seconds": 25.74035,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+        "status": "failed",
+        "runtime_worker_id": "acceptance-runtime-a-20261028",
+        "queue_seconds": 0.751532,
+        "sdk_queue_seconds": 0.810119,
+        "lease_seconds": 81.776425,
+        "cancel_seconds": null
+      },
+      {
+        "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+        "status": "succeeded",
+        "runtime_worker_id": "acceptance-runtime-b-20261028",
+        "queue_seconds": 16.529054,
+        "sdk_queue_seconds": 16.588943,
+        "lease_seconds": 28.274731,
+        "cancel_seconds": null
+      }
+    ],
+    "queue_seconds": {
+      "count": 9,
+      "min": 0.076292,
+      "p50": 4.122294,
+      "p95": 37.965469,
+      "max": 37.965469
+    },
+    "sdk_queue_seconds": {
+      "count": 9,
+      "min": 0.148043,
+      "p50": 4.1625,
+      "p95": 37.9769,
+      "max": 37.9769
+    },
+    "lease_seconds": {
+      "count": 9,
+      "min": 16.173572,
+      "p50": 27.605494,
+      "p95": 81.776425,
+      "max": 81.776425
+    },
+    "cancel_seconds": {
+      "count": 1,
+      "min": 0.240357,
+      "p50": 0.240357,
+      "p95": 0.240357,
+      "max": 0.240357
+    },
+    "database_connections": {
+      "count": 120,
+      "min": 16.0,
+      "p50": 19.0,
+      "p95": 19.0,
+      "max": 19.0
+    },
+    "process_tree_rss_kib": {
+      "70286": {
+        "count": 89,
+        "min": 19264.0,
+        "p50": 207696.0,
+        "p95": 294832.0,
+        "max": 318896.0
+      },
+      "70287": {
+        "count": 120,
+        "min": 19408.0,
+        "p50": 151168.0,
+        "p95": 240112.0,
+        "max": 245840.0
+      }
+    },
+    "durable_transport_and_lease_evidence": {
+      "inbox": [
+        {
+          "event_id": "evt_4281975a3ddf1b728c743962a9a89871",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "received_at": "2026-10-28T21:40:39.421168+08:00",
+          "processed_at": "2026-10-28T21:41:06.309617+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_2ad776b167b207864800bcea840918ba",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "received_at": "2026-10-28T21:42:03.542766+08:00",
+          "processed_at": "2026-10-28T21:42:31.165665+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_a00d70a9e5e94d35a6ff5bc3e0f0a4d9:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "received_at": "2026-10-28T21:45:07.84218+08:00",
+          "processed_at": "2026-10-28T21:45:07.84218+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_1987e343fc06ab4c500792b24eccf552:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "received_at": "2026-10-28T21:41:06.591767+08:00",
+          "processed_at": "2026-10-28T21:41:06.591767+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_c540476c776000f59913e2c8a1c13318",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "received_at": "2026-10-28T21:41:45.382042+08:00",
+          "processed_at": "2026-10-28T21:42:01.575126+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_b8adcc769d2fd243c3ee392a6479cd2b",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "received_at": "2026-10-28T21:42:31.170164+08:00",
+          "processed_at": "2026-10-28T21:42:56.97502+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_b68a73fb97cc403185cec9ecb81943dc:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "received_at": "2026-10-28T21:41:13.586543+08:00",
+          "processed_at": "2026-10-28T21:41:13.586543+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_7dda7207d98e185b29ec9654a5041da7",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "received_at": "2026-10-28T21:40:35.343216+08:00",
+          "processed_at": "2026-10-28T21:41:17.568168+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_99d5ede02e465298d50679485f4ef9d1:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "received_at": "2026-10-28T21:41:18.021175+08:00",
+          "processed_at": "2026-10-28T21:41:18.021175+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_451c8422feca6023fccde56e1437936d:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "received_at": "2026-10-28T21:42:31.586662+08:00",
+          "processed_at": "2026-10-28T21:42:31.586662+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_90af0cc047396431b742c015c065265c",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "received_at": "2026-10-28T21:42:59.104459+08:00",
+          "processed_at": "2026-10-28T21:44:39.208296+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_261200b60c8db625e8787fe5e9790092",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "received_at": "2026-10-28T21:40:35.525133+08:00",
+          "processed_at": "2026-10-28T21:41:13.298958+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_563eb190b82345645da3e12cd97bf342",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "received_at": "2026-10-28T21:41:13.302797+08:00",
+          "processed_at": "2026-10-28T21:41:37.419302+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_b0a299f7205267c2300a547b5f0703be:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "received_at": "2026-10-28T21:41:37.836646+08:00",
+          "processed_at": "2026-10-28T21:41:37.836646+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_e94bf02ccff0f36157206968d575cee5:cancelled",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "received_at": "2026-10-28T21:42:01.769449+08:00",
+          "processed_at": "2026-10-28T21:42:01.769449+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "event_b67a7ad0e459a80117fad6c1d4b017d2:succeeded",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "received_at": "2026-10-28T21:42:57.362057+08:00",
+          "processed_at": "2026-10-28T21:42:57.362057+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "lease-lost:hat_4faf3a77d04a166185f2ae130398a73a",
+          "consumer": "agenttrace-management-exporter-acceptance",
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "received_at": "2026-10-28T21:44:21.095889+08:00",
+          "processed_at": "2026-10-28T21:44:21.095889+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        },
+        {
+          "event_id": "evt_a05d4700efc9ac39f4fa925aae217026",
+          "consumer": "agenttrace-runtime",
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "received_at": "2026-10-28T21:44:39.213349+08:00",
+          "processed_at": "2026-10-28T21:45:07.499279+08:00",
+          "claimed_until": null,
+          "claim_present": false
+        }
+      ],
+      "outbox": [
+        {
+          "event_id": "evt_261200b60c8db625e8787fe5e9790092",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "published_at": "2026-10-28T21:40:35.516924+08:00",
+          "broker_partition": 5,
+          "broker_offset": 0,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_7dda7207d98e185b29ec9654a5041da7",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "published_at": "2026-10-28T21:40:35.3347+08:00",
+          "broker_partition": 6,
+          "broker_offset": 0,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_4281975a3ddf1b728c743962a9a89871",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "published_at": "2026-10-28T21:40:35.335595+08:00",
+          "broker_partition": 0,
+          "broker_offset": 0,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_563eb190b82345645da3e12cd97bf342",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "published_at": "2026-10-28T21:40:35.518031+08:00",
+          "broker_partition": 5,
+          "broker_offset": 1,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_c540476c776000f59913e2c8a1c13318",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "published_at": "2026-10-28T21:41:39.584929+08:00",
+          "broker_partition": 1,
+          "broker_offset": 8,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_b0a299f7205267c2300a547b5f0703be:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "published_at": "2026-10-28T21:41:37.835081+08:00",
+          "broker_partition": 7,
+          "broker_offset": 59,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_1987e343fc06ab4c500792b24eccf552:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "published_at": "2026-10-28T21:41:06.587286+08:00",
+          "broker_partition": 6,
+          "broker_offset": 111,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_b68a73fb97cc403185cec9ecb81943dc:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "published_at": "2026-10-28T21:41:13.585327+08:00",
+          "broker_partition": 3,
+          "broker_offset": 59,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_99d5ede02e465298d50679485f4ef9d1:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "published_at": "2026-10-28T21:41:18.019239+08:00",
+          "broker_partition": 7,
+          "broker_offset": 43,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_e94bf02ccff0f36157206968d575cee5:cancelled",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "published_at": "2026-10-28T21:42:01.768204+08:00",
+          "broker_partition": 4,
+          "broker_offset": 51,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_cca3ec6daae103a8be858cb93cf79c37",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "published_at": "2026-10-28T21:42:01.337463+08:00",
+          "broker_partition": 4,
+          "broker_offset": 48,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_2ad776b167b207864800bcea840918ba",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "published_at": "2026-10-28T21:42:03.518845+08:00",
+          "broker_partition": 0,
+          "broker_offset": 1,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_b8adcc769d2fd243c3ee392a6479cd2b",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "published_at": "2026-10-28T21:42:02.518614+08:00",
+          "broker_partition": 6,
+          "broker_offset": 1,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "lease-lost:hat_4faf3a77d04a166185f2ae130398a73a",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "published_at": "2026-10-28T21:44:21.091904+08:00",
+          "broker_partition": 4,
+          "broker_offset": 78,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_a05d4700efc9ac39f4fa925aae217026",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "published_at": "2026-10-28T21:44:22.772913+08:00",
+          "broker_partition": 5,
+          "broker_offset": 2,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_451c8422feca6023fccde56e1437936d:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "published_at": "2026-10-28T21:42:31.58552+08:00",
+          "broker_partition": 0,
+          "broker_offset": 93,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_a00d70a9e5e94d35a6ff5bc3e0f0a4d9:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "published_at": "2026-10-28T21:45:07.83947+08:00",
+          "broker_partition": 2,
+          "broker_offset": 56,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "event_b67a7ad0e459a80117fad6c1d4b017d2:succeeded",
+          "topic": "agenttrace.run.events.v1",
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "published_at": "2026-10-28T21:42:57.360462+08:00",
+          "broker_partition": 0,
+          "broker_offset": 112,
+          "attempt_count": 0
+        },
+        {
+          "event_id": "evt_90af0cc047396431b742c015c065265c",
+          "topic": "agenttrace.run.commands.v1",
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "published_at": "2026-10-28T21:42:58.519656+08:00",
+          "broker_partition": 3,
+          "broker_offset": 8,
+          "attempt_count": 0
+        }
+      ],
+      "leases": [
+        {
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "attempt_id": "hat_531b003bbd64f840d63d4813e4cab980",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:40:39.432176+08:00",
+          "renewed_at": "2026-10-28T21:40:59.473253+08:00",
+          "expires_at": "2026-10-28T21:41:29.47697+08:00"
+        },
+        {
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "attempt_id": "hat_5f9b4777e48971f9f51b5ef3b652c44f",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:40:35.532361+08:00",
+          "renewed_at": "2026-10-28T21:41:05.595786+08:00",
+          "expires_at": "2026-10-28T21:41:35.601672+08:00"
+        },
+        {
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "attempt_id": "hat_1fe04cf800023d934b685bee4991c071",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:40:35.349939+08:00",
+          "renewed_at": "2026-10-28T21:41:15.420418+08:00",
+          "expires_at": "2026-10-28T21:41:45.422895+08:00"
+        },
+        {
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "attempt_id": "hat_e0f3c91f772c2351f07cd7893080b7f7",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:41:13.304592+08:00",
+          "renewed_at": "2026-10-28T21:41:33.31599+08:00",
+          "expires_at": "2026-10-28T21:42:03.337468+08:00"
+        },
+        {
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "attempt_id": "hat_0aab4c9575ae480b0a520571e5ea9313",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:41:45.388094+08:00",
+          "renewed_at": "2026-10-28T21:41:55.482303+08:00",
+          "expires_at": "2026-10-28T21:42:25.484711+08:00"
+        },
+        {
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:42:03.546126+08:00",
+          "renewed_at": "2026-10-28T21:42:23.58766+08:00",
+          "expires_at": "2026-10-28T21:42:53.589648+08:00"
+        },
+        {
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:42:31.219879+08:00",
+          "renewed_at": "2026-10-28T21:42:51.243082+08:00",
+          "expires_at": "2026-10-28T21:43:21.248003+08:00"
+        },
+        {
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "expired",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:42:59.110676+08:00",
+          "renewed_at": "2026-10-28T21:43:49.169464+08:00",
+          "expires_at": "2026-10-28T21:44:19.171171+08:00"
+        },
+        {
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "attempt_id": "hat_e9ec65161615fef74cc9379379a4cdfd",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "acquired_at": "2026-10-28T21:44:39.219756+08:00",
+          "renewed_at": "2026-10-28T21:44:59.280005+08:00",
+          "expires_at": "2026-10-28T21:45:29.366725+08:00"
+        }
+      ],
+      "assignments": [
+        {
+          "run_id": "run_ca99041a7e1b0fe6b15ceb04c973a047",
+          "attempt_id": "hat_1fe04cf800023d934b685bee4991c071",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:40:35.349939+08:00",
+          "released_at": "2026-10-28T21:41:17.563783+08:00",
+          "sdk_started_at": "2026-10-28T21:40:35.42169+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_0d9316ea5ebb8784d82ad43e8336528b",
+          "attempt_id": "hat_e0f3c91f772c2351f07cd7893080b7f7",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:41:13.304592+08:00",
+          "released_at": "2026-10-28T21:41:37.407649+08:00",
+          "sdk_started_at": "2026-10-28T21:41:13.316023+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_0945b0f49c1004019bbc4aec45a40e20",
+          "attempt_id": "hat_0aab4c9575ae480b0a520571e5ea9313",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:41:45.388094+08:00",
+          "released_at": "2026-10-28T21:42:01.561666+08:00",
+          "sdk_started_at": "2026-10-28T21:41:45.482962+08:00",
+          "attempt_status": "cancelled"
+        },
+        {
+          "run_id": "run_bbbc4b0b9c36e0c4aacc027fbd96ef66",
+          "attempt_id": "hat_a701ae996fdc843b9ddf57c2a88a0815",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:42:03.546126+08:00",
+          "released_at": "2026-10-28T21:42:31.15162+08:00",
+          "sdk_started_at": "2026-10-28T21:42:03.602592+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_5830b690e73ed117408ce164b9e2a967",
+          "attempt_id": "hat_47ca516ac7dc526f7f22345537da9124",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:42:31.219879+08:00",
+          "released_at": "2026-10-28T21:42:56.960229+08:00",
+          "sdk_started_at": "2026-10-28T21:42:31.241564+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_e99ff65f38a1d98955f92c6f8361a212",
+          "attempt_id": "hat_4faf3a77d04a166185f2ae130398a73a",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "expired",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:42:59.110676+08:00",
+          "released_at": "2026-10-28T21:44:20.887101+08:00",
+          "sdk_started_at": "2026-10-28T21:42:59.169263+08:00",
+          "attempt_status": "lost"
+        },
+        {
+          "run_id": "run_05cf5b672ba3ba29a826ba696583be82",
+          "attempt_id": "hat_e9ec65161615fef74cc9379379a4cdfd",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:44:39.219756+08:00",
+          "released_at": "2026-10-28T21:45:07.494487+08:00",
+          "sdk_started_at": "2026-10-28T21:44:39.279645+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_b2c35aeedd9f9d67fa323f6f8e1934ee",
+          "attempt_id": "hat_531b003bbd64f840d63d4813e4cab980",
+          "runtime_worker_id": "acceptance-runtime-a-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:40:39.432176+08:00",
+          "released_at": "2026-10-28T21:41:06.296784+08:00",
+          "sdk_started_at": "2026-10-28T21:40:39.472382+08:00",
+          "attempt_status": "succeeded"
+        },
+        {
+          "run_id": "run_cdffcc1db75da7959deb2af0f6f283f7",
+          "attempt_id": "hat_5f9b4777e48971f9f51b5ef3b652c44f",
+          "runtime_worker_id": "acceptance-runtime-b-20261028",
+          "state": "released",
+          "fencing_token": 2,
+          "assigned_at": "2026-10-28T21:40:35.532361+08:00",
+          "released_at": "2026-10-28T21:41:13.292681+08:00",
+          "sdk_started_at": "2026-10-28T21:40:35.597037+08:00",
+          "attempt_status": "succeeded"
+        }
+      ]
+    },
+    "existing_api_tree_rss_kib": {
+      "count": 120,
+      "min": 29584.0,
+      "p50": 31952.0,
+      "p95": 33344.0,
+      "max": 33344.0
+    },
+    "total_model_tokens": 300455
+  },
+  "kafka_evidence_scope": "Real durable outbox broker partition/offset acknowledgements and matching runtime inbox records; no Kafka pause, broker failure, or independent offset-lag measurement.",
+  "retained_conversations": [
+    "conv_e19d00c041c2a5ae3c04af778c3ee195"
+  ],
+  "surviving_fault_time_runtime_descendants": [],
+  "elapsed_total_seconds": 284.272,
+  "status": "provisional",
+  "original_runtime_drain": {
+    "previous": false,
+    "acknowledged_in_use": 0,
+    "restored": true
+  },
+  "owned_node_cleanup": [
+    {
+      "pid": 70358,
+      "status": "already_exited"
+    },
+    {
+      "pid": 70359,
+      "status": "already_exited"
+    },
+    {
+      "pid": 70360,
+      "status": "already_exited"
+    },
+    {
+      "pid": 70361,
+      "status": "already_exited"
+    },
+    {
+      "pid": 70427,
+      "status": "already_exited"
+    },
+    {
+      "pid": 72551,
+      "status": "already_exited"
+    },
+    {
+      "pid": 73976,
+      "status": "already_exited"
+    },
+    {
+      "pid": 74713,
+      "status": "already_exited"
+    },
+    {
+      "pid": 75657,
+      "status": "already_exited"
+    },
+    {
+      "pid": 77645,
+      "status": "already_exited"
+    },
+    {
+      "pid": 82276,
+      "status": "already_exited"
+    }
+  ],
+  "remaining_verified_owned_descendants": [],
+  "existing_stack_identity_after": {
+    "native_owner_unchanged": true,
+    "api_unchanged": true,
+    "original_runtime_unchanged": true
+  },
+  "finished_at": "2026-10-28T13:45:18.196247+00:00",
+  "release_identity_after": {
+    "source_sha": "645942d983c2c3cb8432209e484ffec86da392e9",
+    "dirty_diff_sha256": "27e75c55c9b703b6b42dbaf206e07aea516a6b4dd8ae14f43c0218283c7456ca",
+    "source_tree_sha256": "613c962bf18884a5318c6f1689d5888ef5cccfd6ba56f01cd22d52af2664aaf3",
+    "source_file_count": 249,
+    "runtime_binary_sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430",
+    "node_dist_main_sha256": "981a97f0307af9f7ccdac5e3edd3fb34f33699899cf6810b02a5bc23c678f477",
+    "node_dist_mcp_sha256": "d594935340cc5dbb842e8ac692db5f2582aad03356bc942e7508738dde6b1a06",
+    "harness_sha256": "4369238e56ea125b836abe6b03c76d0ccfe0efaa0a0cdfc33ba71082e178180d",
+    "private_supervisor_sha256": "ab54a06318777c7003f3f33b7b4e4d3ddea3c1105e967795e221b9d25a66dcec"
+  },
+  "release_identity_unchanged": false,
+  "history": [
+    {
+      "schema": "agenttrace.management-faults.v1",
+      "status": "waiting_for_explicit_parent_identity_done",
+      "checkpoint_at": "2026-10-28T13:36:02.871668+00:00",
+      "release_identity": {
+        "source_sha": "645942d983c2c3cb8432209e484ffec86da392e9",
+        "dirty_diff_sha256": "9aea9ba199ae322dbf65787bb60064f979086248540802101f34cc71249b8551",
+        "source_tree_sha256": "c06ef7d7625dc53bfde9022e6d3be8008aabf9d3bcb82ac92339e8cce4165e9e",
+        "source_file_count": 246,
+        "runtime_binary_sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430",
+        "node_dist_main_sha256": "981a97f0307af9f7ccdac5e3edd3fb34f33699899cf6810b02a5bc23c678f477",
+        "node_dist_mcp_sha256": "d594935340cc5dbb842e8ac692db5f2582aad03356bc942e7508738dde6b1a06",
+        "harness_sha256": "95f1704cfaa874f865bc8f3b323c89f85dbd35af76dbd805801a84e23ab831ec",
+        "private_supervisor_sha256": "8773014895c63e04dfaabaaea8d09f9a3c1123fe3aa420823982f08b5c953901"
+      },
+      "topology": {
+        "AGENTTRACE_PROJECT_ID": "prj_2f2b5e037cfb0ce640841aa7702d50f9",
+        "AGENTTRACE_API_URL": "http://127.0.0.1:8180",
+        "AGENTTRACE_WORKER_URL": "http://127.0.0.1:8110",
+        "AGENTTRACE_KAFKA_GROUP_ID": "agenttrace-management-runtime-acceptance",
+        "AGENTTRACE_KAFKA_BROKERS": "127.0.0.1:9192",
+        "AGENTTRACE_BROWSER_WORKER_CAPACITY": "4",
+        "AGENTTRACE_MANAGEMENT_IDENTITY_URL": "http://127.0.0.1:8125/management_identity.html",
+        "runtime_workers": [
+          "acceptance-runtime-a-20261028",
+          "acceptance-runtime-b-20261028"
+        ],
+        "runtime_concurrency_per_process": 2,
+        "browser_worker_id": "unset; canonical endpoint-derived shared provider",
+        "initial_runs": 4,
+        "database_scope": "agenttrace_test_management_acceptance_20261028",
+        "existing_stack_owner_pid": 49449,
+        "original_runtime_worker": "runtime-KDQDT6WYL9-51297-HSIIBS7I3NCRA2CXSPVSYQENRR"
+      },
+      "preparation_verification": {
+        "observed_date": "2026-10-28",
+        "scope": "Preparation only, not actual real SDK fault workload acceptance.",
+        "private_supervisor_safety_tests": {
+          "command": "python3 -m unittest owned_fault_supervisor_test -v",
+          "passed": 7,
+          "exit_code": 0
+        },
+        "scoped_local_harness_tests": {
+          "command": "python3 -m unittest management_test management_faults_test composition_test run_test",
+          "passed": 33,
+          "exit_code": 0
+        },
+        "targeted_go_tests": {
+          "command": "go test ./cmd/agenttrace-runtime ./internal/piharness ./internal/runtime",
+          "exit_code": 0,
+          "cached": true
+        },
+        "private_runtime_build": {
+          "command": "go build -o /Users/bytedance/Library/Caches/agenttrace-management-acceptance-20261028/agenttrace-runtime-owned ./cmd/agenttrace-runtime",
+          "exit_code": 0,
+          "sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430"
+        },
+        "read_only_actual_test_db_query_validation": {
+          "validated": [
+            "inbox",
+            "outbox",
+            "leases",
+            "assignments"
+          ],
+          "scenario_runs_submitted": 0,
+          "signals_sent": false,
+          "empty_scenario_scope": true,
+          "exit_code": 0
+        },
+        "broad_local_discovery_observation": {
+          "command": "python3 -m unittest discover -s integration/local -p '*_test.py'",
+          "tests_run": 38,
+          "errors": 5,
+          "exit_code": 1,
+          "cause": "Concurrent infrastructure_faults.py stub raised NotImplementedError in the other agent's new tests. Those files were not modified by this work.",
+          "not_a_current_full_suite_pass": true
+        }
+      },
+      "deployed_stack_metadata": {
+        "api_binary_sha256": "825e29f47508065cbd7e226dfd8743cb08c9036b3bcd878d531a34d5d69cbd2e",
+        "original_runtime_binary_sha256": "64af5c5401f8a69069746d5b14da03d97836a7f069ea764a453f588f129d34c6",
+        "current_api_main_source_sha256": "f7fed2e5d8186153104e657f58a1829a318be9aa595c3f9a97d21f6a4aa380c6",
+        "api_build_metadata": "/var/folders/_v/fzkw57w55270qg2ytkvhgggr0000gn/T/go-build1158972036/b001/exe/agenttrace-api: go1.26.4\n\tpath\tgithub.com/Asukadaisiki/AI_Web_Testing/backend/cmd/agenttrace-api\n\tmod\tgithub.com/Asukadaisiki/AI_Web_Testing/backend\t(devel)\t\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/jackc/pgpassfile\tv1.0.0\th1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\tdep\tgithub.com/jackc/pgservicefile\tv0.0.0-20240606120523-5a60cdf6a761\th1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\tdep\tgithub.com/jackc/pgx/v5\tv5.8.0\th1:TYPDoleBBme0xGSAX3/+NujXXtpZn9HBONkQC7IEZSo=\n\tdep\tgithub.com/jackc/puddle/v2\tv2.2.2\th1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\tdep\tgithub.com/klauspost/compress\tv1.18.4\th1:RPhnKRAQ4Fh8zU2FY/6ZFDwTVTxgJ/EMydqSTzE9a2c=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.25\th1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0=\n\tdep\tgithub.com/redis/go-redis/v9\tv9.20.1\th1:sfCU6A8P3dXbKyWes02uxA2baehGux9dZHfEKtsTB1w=\n\tdep\tgithub.com/twmb/franz-go\tv1.20.7\th1:P4MGSXJjjAPP3NRGPCks/Lrq+j+twWMVl1qYCVgNmWY=\n\tdep\tgithub.com/twmb/franz-go/pkg/kmsg\tv1.12.0\th1:CbatD7ers1KzDNgJqPbKOq0Bz/WLBdsTH75wgzeVaPc=\n\tdep\tgo.uber.org/atomic\tv1.11.0\th1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=\n\tdep\tgolang.org/x/sync\tv0.17.0\th1:l60nONMj9l5drqw6jlhIELNv9I0A4OFgRsG9k2oT9Ug=\n\tdep\tgolang.org/x/text\tv0.29.0\th1:1neNs90w9YzJ9BocxfsQNHKuAT4pkghyXc4nhZ6sJvk=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tDefaultGODEBUG=containermaxprocs=0,cryptocustomrand=1,decoratemappings=0,tlssecpmlkem=0,tlssha1=1,updatemaxprocs=0,urlstrictcolons=0,x509sha256skid=0\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0",
+        "api_source_only_caveat": "Parent reports the latest SSE redaction and BaseContext graceful-shutdown edits are source-only. Existing API binary predates those edits; this scenario does not validate their deployment."
+      },
+      "process_identity_before": {
+        "native_owner": {
+          "pid": 49449,
+          "ppid": 1,
+          "started": "Wed Oct 28 21:30:37 2026"
+        },
+        "existing_api": {
+          "pid": 51279,
+          "ppid": 51273,
+          "started": "Wed Oct 28 21:30:48 2026"
+        },
+        "original_runtime": {
+          "pid": 51297,
+          "ppid": 51284,
+          "started": "Wed Oct 28 21:30:49 2026"
+        }
+      },
+      "parent_progress": {
+        "runs": {
+          "cancelled": 3,
+          "failed": 3,
+          "running": 1,
+          "succeeded": 8
+        },
+        "active_leases": 1,
+        "original_runtime_in_use": 1
+      },
+      "original_runtime_drain": {
+        "previous": false,
+        "changed": false
+      },
+      "fault_children_launched": false,
+      "fault_signals_sent": false,
+      "measurements": {},
+      "checks": {
+        "concurrent-real-sdk-load": {
+          "status": "skipped",
+          "reason": "Explicit parent identity done message not yet received."
+        },
+        "active-drain-cancel-rebalance": {
+          "status": "skipped",
+          "reason": "Explicit parent identity done message not yet received."
+        },
+        "owned-crash-after-external-effect": {
+          "status": "skipped",
+          "reason": "Explicit parent identity done message not yet received."
+        },
+        "phase3-actual-measurements": {
+          "status": "skipped",
+          "reason": "Explicit parent identity done message not yet received."
+        }
+      },
+      "limitations": [
+        "No real fault workload has executed at this checkpoint; missing timings/tokens/RSS are not zero.",
+        "Preparation tests are offline safety checks, not real SDK fault evidence.",
+        "Prior owned waiter 53040 was interrupted with no runtime children; final report write raced a Node rebuild.",
+        "Schema faults, Kafka pause, Redis outage and horizontal browser failover remain unverified.",
+        "Parent identity and UI acceptance are still active; original runtime has not been drained."
+      ],
+      "existing_stack_identity_after": {
+        "native_owner_unchanged": true,
+        "api_unchanged": true,
+        "original_runtime_unchanged": true
+      }
+    }
+  ],
+  "report_corrections": [
+    {
+      "field": "runs.*.browser_succeeded_spans",
+      "previous_value": 0,
+      "reason": "Counter used tool kind, but actual browser traces use operation kind. Browser-action acceptance already checked successful named spans and PNG bytes.",
+      "deleted_trace_policy": "Missing exact counts are null, never reported as zero."
+    }
+  ],
+  "post_cleanup_verification": {
+    "observed_at": "2026-10-28T13:48:17.477051+00:00",
+    "api_health": {
+      "status": "ok",
+      "dependencies": {
+        "kafka": {
+          "status": "ok",
+          "required": false,
+          "pending_outbox": 0
+        },
+        "langfuse": {
+          "status": "ok",
+          "required": false,
+          "pending_outbox": 0
+        },
+        "postgres": {
+          "status": "ok",
+          "required": true,
+          "pending_outbox": 0
+        },
+        "redis": {
+          "status": "ok",
+          "required": false,
+          "pending_outbox": 0
+        },
+        "worker": {
+          "status": "ok",
+          "required": false,
+          "pending_outbox": 0
+        }
+      }
+    },
+    "browser_health": {
+      "status": "ok",
+      "artifacts_dir": "/Users/bytedance/Library/Caches/agenttrace-management-acceptance-20261028/artifacts"
+    },
+    "original_runtime": {
+      "id": "runtime-KDQDT6WYL9-51297-HSIIBS7I3NCRA2CXSPVSYQENRR",
+      "alive": true,
+      "draining": false,
+      "in_use": 0
+    },
+    "active_leases": 0,
+    "remaining_owned_supervisors_or_runtimes": [],
+    "retained_crash_recovery": {
+      "status": "failed",
+      "error_code": "execution_lost",
+      "environment_state": "needs_review",
+      "fencing_token": 3,
+      "attempt_status": "lost",
+      "attempt_count": 1,
+      "assignment_state": "expired",
+      "lease_state": "expired"
+    },
+    "protected_process_identities_unchanged": true,
+    "new_runs_submitted": 0,
+    "signals_sent": false
+  },
+  "verification_after_harness_fixes": {
+    "scoped_harness_tests": {
+      "passed": 36,
+      "exit_code": 0
+    },
+    "private_supervisor_safety_tests": {
+      "passed": 7,
+      "exit_code": 0
+    }
+  },
+  "privacy_build_authorization_scope": "Supervisor privacy-ready flag referred to the prior authorized Node build, identified by release_identity Node hashes. Newly discovered public model-input/premarker-text password fixes and control-close-across-TTL fixes were not deployed or validated by this scenario. No latest-privacy acceptance is claimed.",
+  "report_finalization_identity": {
+    "source_sha": "645942d983c2c3cb8432209e484ffec86da392e9",
+    "dirty_diff_sha256": "bf075f03959471344aedd361ebd214a4dcf020f5a5d3ade1a3ca9105837b1cf8",
+    "source_tree_sha256": "3e5285432022f13ee6ff37c645608173838bff0dd76446b67d90bb2102bb355e",
+    "source_file_count": 251,
+    "runtime_binary_sha256": "1972f934c818f11c1ef5beee01245a045af9b35f97d5790f47ae50e4bb056430",
+    "node_dist_main_sha256": "981a97f0307af9f7ccdac5e3edd3fb34f33699899cf6810b02a5bc23c678f477",
+    "node_dist_mcp_sha256": "d594935340cc5dbb842e8ac692db5f2582aad03356bc942e7508738dde6b1a06",
+    "harness_sha256": "fa54eb423d853bef24552b15a613b03be3ff66763acc77bb0972fcb406f06df9",
+    "private_supervisor_sha256": "ed0026bb7d27b2a84ab4c90e6518f38f571bae4f588edb8e40b47eee1e139696"
+  }
+}

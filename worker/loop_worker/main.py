@@ -20,11 +20,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .actions import ActionFailure
 from .contracts import (
@@ -42,6 +44,7 @@ from .contracts import (
     validate_case,
 )
 from .evidence import artifacts_dir
+from .environments import ControlInput, IdentityRequest, ProviderError, ProvisionRequest
 from .runner import run_case
 from .sessions import SessionManager, SessionNotFound
 
@@ -65,6 +68,40 @@ def _describe_validation_error(exc: RequestValidationError) -> str:
 def create_app() -> FastAPI:
     """构造 FastAPI app；每个 app 拥有自己的会话表。"""
     manager = SessionManager()
+    internal_token = os.environ.get("LOOP_WORKER_INTERNAL_TOKEN", "")
+
+    def authenticate(request: Request):
+        if not internal_token:
+            raise ProviderError(503, "internal_auth_unconfigured",
+                                "worker internal identity is not configured")
+        authorization = request.headers.get("authorization", "")
+        if not secrets.compare_digest(authorization.encode(), f"Bearer {internal_token}".encode()):
+            raise ProviderError(401, "unauthorized", "worker internal identity required")
+
+    def session_identity(request):
+        try:
+            generation = int(request.headers["x-profile-generation"])
+            token = int(request.headers["x-fencing-token"])
+            if generation <= 0 or token <= 0:
+                raise ValueError
+            return generation, token
+        except (KeyError, ValueError) as exc:
+            raise ProviderError(400, "invalid_request",
+                                "X-Profile-Generation and X-Fencing-Token are required") from exc
+
+    @asynccontextmanager
+    async def session_guard(request, session_id):
+        session = manager.get(session_id)
+        if session.environment_id:
+            authenticate(request)
+            generation, token = session_identity(request)
+            async with manager.environments.guard(
+                session, generation, token, request.headers.get("x-environment-id"),
+                request.headers.get("x-project-id"),
+            ):
+                yield session
+        else:
+            yield session
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
@@ -75,8 +112,22 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="loop-worker", version="0.1.0", lifespan=lifespan)
     app.state.session_manager = manager
+    app.state.environment_provider = manager.environments
+
+    @app.middleware("http")
+    async def protect_provider(request: Request, call_next):
+        if request.url.path == "/environments" or request.url.path.startswith("/environments/"):
+            try:
+                authenticate(request)
+            except ProviderError as exc:
+                return _error(exc.status, exc.code, exc.detail)
+        return await call_next(request)
 
     # ---- 统一错误信封 ----
+
+    @app.exception_handler(ProviderError)
+    async def _on_provider_error(request: Request, exc: ProviderError) -> JSONResponse:
+        return _error(exc.status, exc.code, exc.detail)
 
     @app.exception_handler(SessionNotFound)
     async def _on_session_not_found(request: Request, exc: SessionNotFound) -> JSONResponse:  # noqa: ARG001
@@ -103,36 +154,114 @@ def create_app() -> FastAPI:
     # ---- 路由 ----
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
+    async def health():
         # artifacts_dir 是给控制面对账用的：证据图片由控制面的 /artifacts/ 提供，
         # 两边目录不一致时图片会静默 404，只有把路径报出去才查得出来。
+        if manager._cleanup_uncertain:
+            return JSONResponse(status_code=503, content={
+                "status": "not_ready", "artifacts_dir": str(artifacts_dir()),
+            })
         return {"status": "ok", "artifacts_dir": str(artifacts_dir())}
 
     @app.post("/sessions")
-    async def create_session(body: OpenSessionRequest) -> dict[str, str]:
+    async def create_session(body: OpenSessionRequest, request: Request) -> dict[str, str]:
         # 返回的是浏览器会话句柄；body.session_id（领域会话）记在会话上，决定证据目录。
-        session = await manager.create(body.session_id)
+        manager.require_ready()
+        if body.environment_id:
+            authenticate(request)
+            session = await manager.environments.create(manager, body)
+        else:
+            session = await manager.create(body.session_id)
         return {"session_id": session.browser_session_id}
 
     @app.post("/sessions/{session_id}/navigate")
-    async def navigate(session_id: str, body: NavigateRequest) -> Observation:
-        return await manager.navigate(session_id, body.url)
+    async def navigate(session_id: str, body: NavigateRequest, request: Request) -> Observation:
+        async with session_guard(request, session_id):
+            return await manager.navigate(session_id, body.url)
 
     @app.post("/sessions/{session_id}/act")
-    async def act(session_id: str, body: ActRequest) -> ActResponse:
-        return await manager.act(session_id, body)
+    async def act(session_id: str, body: ActRequest, request: Request) -> ActResponse:
+        async with session_guard(request, session_id):
+            return await manager.act(session_id, body)
 
     @app.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str) -> dict[str, bool]:
-        await manager.close(session_id)
+    async def delete_session(session_id: str, request: Request) -> dict[str, bool]:
+        async with session_guard(request, session_id):
+            await manager.close(session_id)
         return {"closed": True}
 
+    @app.get("/environments/{environment_id}")
+    async def environment_metadata(environment_id: str):
+        return await manager.environments.describe(environment_id)
+
+    @app.post("/environments/{environment_id}/provision")
+    async def provision(environment_id: str, body: ProvisionRequest):
+        return await manager.environments.provision(environment_id, body)
+
+    @app.post("/environments/{environment_id}/reset")
+    async def reset(environment_id: str, body: IdentityRequest):
+        return await manager.environments.reset(environment_id, body)
+
+    @app.delete("/environments/{environment_id}")
+    async def delete_environment(environment_id: str, body: IdentityRequest):
+        return await manager.environments.delete(environment_id, body)
+
+    @app.get("/environments/{environment_id}/sessions/{session_id}/screenshot")
+    async def control_screenshot(environment_id: str, session_id: str, request: Request):
+        manager.require_ready()
+        session = manager.get(session_id)
+        if not session.environment_id:
+            raise ProviderError(409, "environment_conflict", "session is not Environment scoped")
+        generation, token = session_identity(request)
+        header_environment = request.headers.get("x-environment-id")
+        if header_environment is not None and header_environment != environment_id:
+            raise ProviderError(409, "environment_conflict", "mismatched Environment header")
+        async with manager.environments.guard(
+            session, generation, token, environment_id, request.headers.get("x-project-id"),
+        ):
+            image = await session.page.screenshot(type="png", full_page=False, timeout=5000)
+        return Response(content=image, media_type="image/png",
+                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+    @app.post("/environments/{environment_id}/sessions/{session_id}/input")
+    async def control_input(environment_id: str, session_id: str, body: ControlInput, request: Request):
+        manager.require_ready()
+        session = manager.get(session_id)
+        if not session.environment_id:
+            raise ProviderError(409, "environment_conflict", "session is not Environment scoped")
+        header_environment = request.headers.get("x-environment-id")
+        if header_environment is not None and header_environment != environment_id:
+            raise ProviderError(409, "environment_conflict", "mismatched Environment header")
+        async with manager.environments.guard(
+            session, body.profile_generation, body.fencing_token, environment_id,
+            request.headers.get("x-project-id"),
+        ):
+            await manager.environments.input(session, body)
+        return {"accepted": True}
+
     @app.post("/execute")
-    async def execute(body: ExecuteRequest) -> ExecutionResult:
+    async def execute(body: ExecuteRequest, request: Request) -> ExecutionResult:
         # 先校验：契约非法一律 400，且不浪费一次浏览器启动
         case = validate_case(body.case)
+        manager.require_ready()
+        if body.environment_id:
+            authenticate(request)
+            async with manager.environments.execution_guard(body) as session:
+                browser = await manager.browser()
+                return await run_case(
+                    case, browser=browser, session_id=body.session_id,
+                    environment_policy=session.environment_policy,
+                    upload_scope=f"{body.environment_id}_g{body.profile_generation}",
+                    initial_storage_state=session.initial_storage_state,
+                    on_cleanup_error=manager.mark_cleanup_uncertain,
+                )
+        if manager.environments.owns_domain_session(body.session_id):
+            raise ProviderError(400, "invalid_request", "managed execution requires Environment identity")
         browser = await manager.browser()
-        return await run_case(case, browser=browser, session_id=body.session_id)
+        return await run_case(
+            case, browser=browser, session_id=body.session_id,
+            on_cleanup_error=manager.mark_cleanup_uncertain,
+        )
 
     return app
 

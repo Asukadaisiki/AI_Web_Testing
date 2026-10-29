@@ -26,13 +26,13 @@ const EXPECTED_ORDER: BrowserToolName[] = [
   "finish_case",
 ];
 
-function requiredKeys(shape: z.ZodRawShape): string[] {
+function requiredKeys(shape: Record<string, z.ZodType>): string[] {
   return Object.entries(shape)
     .filter(([, schema]) => !schema.isOptional())
     .map(([key]) => key);
 }
 
-function schemaFor(name: BrowserToolName): z.ZodRawShape {
+function schemaFor(name: BrowserToolName): Record<string, z.ZodType> {
   const schema = BROWSER_TOOL_SCHEMAS.find((item) => item.name === name);
   expect(schema, `schema for ${name} must exist`).toBeDefined();
   return schema!.inputSchema;

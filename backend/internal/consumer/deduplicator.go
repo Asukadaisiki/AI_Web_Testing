@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
@@ -26,6 +27,10 @@ type Handler func(context.Context, Tx, eventbus.Message) error
 type Deduplicator struct {
 	pool     *pgxpool.Pool
 	consumer string
+
+	// ClaimTTL bounds recovery time for abandoned external handlers.
+	// Zero uses the default of 30 seconds.
+	ClaimTTL time.Duration
 }
 
 // NewDeduplicator creates an inbox-backed deduplicator for a consumer name.

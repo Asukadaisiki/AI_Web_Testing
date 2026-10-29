@@ -212,7 +212,9 @@ _COLLECT_JS = """
     if (!interactive && own.length === 0 && !(el.children.length === 0 && full.length > 0)) continue;
     const visible = isVisible(el);
     const enabled = !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-    const value = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') ? String(el.value) : null;
+    // Redact in the browser, before raw metadata crosses the observation boundary.
+    const password = tag === 'INPUT' && el.type === 'password';
+    const value = !password && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') ? String(el.value) : null;
     const rect = el.getBoundingClientRect();
     out.push({
       element: el,

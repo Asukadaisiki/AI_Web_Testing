@@ -1,6 +1,7 @@
 import { ListTree, MessagesSquare, PanelLeft } from 'lucide-react';
 import { useState } from 'react';
 import { ConversationPane } from '../conversation/ConversationPane';
+import { useExecutionCatalog } from '../harness/useExecutionCatalog';
 import { ProjectConversationPane } from '../projects/ProjectConversationPane';
 import { TracePane } from '../trace/TracePane';
 import { useWorkspace } from './useWorkspace';
@@ -8,7 +9,8 @@ import { useWorkspace } from './useWorkspace';
 type Pane = 'projects' | 'conversation' | 'trace';
 
 export function Workspace(): JSX.Element {
-  const workspace = useWorkspace();
+  const workspace = useWorkspace({ legacyAgents: false });
+  const catalog = useExecutionCatalog();
   const [activePane, setActivePane] = useState<Pane>('conversation');
 
   return (
@@ -51,7 +53,7 @@ export function Workspace(): JSX.Element {
           <ProjectConversationPane workspace={workspace} />
         </div>
         <div className={`pane-slot pane-slot-center${activePane === 'conversation' ? ' is-active' : ''}`}>
-          <ConversationPane workspace={workspace} />
+          <ConversationPane workspace={workspace} catalog={catalog} />
         </div>
         <div className={`pane-slot pane-slot-right${activePane === 'trace' ? ' is-active' : ''}`}>
           <TracePane workspace={workspace} />

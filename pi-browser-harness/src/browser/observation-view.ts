@@ -568,7 +568,8 @@ function toElementView(element: Element): ElementView {
     ...(element.text
       ? { text: compactText(element.text, MAX_PAGE_ELEMENT_TEXT) }
       : {}),
-    ...(element.value !== null ? { value: element.value } : {}),
+    ...(element.value !== null && element.attributes?.type?.toLowerCase() !== "password"
+      ? { value: element.value } : {}),
     ...(element.container_ref ? { container_ref: element.container_ref } : {}),
     ...(element.locators[0] !== undefined
       ? { locator_kind: element.locators[0].kind }

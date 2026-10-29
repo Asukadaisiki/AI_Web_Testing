@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
+  createMessage,
   getConversation,
   getRun,
   getTrace,
@@ -27,6 +28,7 @@ vi.mock('../../api', async () => {
   const actual = await vi.importActual<typeof import('../../api')>('../../api');
   return {
     ...actual,
+    createMessage: vi.fn(),
     getConversation: vi.fn(),
     getRun: vi.fn(),
     getTrace: vi.fn(),
@@ -136,6 +138,8 @@ function derivedNode(runId: string): DerivedTraceNode {
 
 class FakeEventSource {
   static urls: string[] = [];
+  static instances: FakeEventSource[] = [];
+  listeners = new Map<string, (event: Event) => void>();
 
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
   onopen: (() => void) | null = null;
@@ -143,9 +147,12 @@ class FakeEventSource {
 
   constructor(url: string | URL) {
     FakeEventSource.urls.push(String(url));
+    FakeEventSource.instances.push(this);
   }
 
-  addEventListener(): void {}
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, listener);
+  }
   removeEventListener(): void {}
   close(): void {}
 }
@@ -154,6 +161,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   FakeEventSource.urls = [];
+  FakeEventSource.instances = [];
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.mocked(listProjects).mockResolvedValue([
     {
@@ -450,6 +458,30 @@ describe('workspace request freshness', () => {
 });
 
 describe('workspace run selection and rerun', () => {
+  it('passes selected execution and full model identity to the message API', async () => {
+    window.history.replaceState(null, '', '/?project=project-1&conversation=conversation-1');
+    vi.mocked(getConversation).mockResolvedValue(conversation('conversation-1', ['run-new']));
+    vi.mocked(getRun).mockResolvedValue(run('run-new'));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [], attempts: [], usage: [], operation_evidence: [], derived_nodes: [],
+    });
+    vi.mocked(createMessage).mockResolvedValue({ message_id: 'message-new', run_id: 'run-new', status: 'queued' });
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.conversation).not.toBeNull());
+    await act(async () => {
+      await result.current.sendMessage(
+        'Check', 'codex',
+        { provider: 'openai-responses', name: 'gpt-5', reasoning_effort: 'high' },
+        'send-1', { runtime_id: 'codex', harness_id: 'browser' },
+      );
+    });
+    expect(createMessage).toHaveBeenCalledWith('conversation-1', {
+      content: 'Check', agent_id: 'codex',
+      model: { provider: 'openai-responses', name: 'gpt-5', reasoning_effort: 'high' },
+      idempotency_key: 'send-1', runtime_id: 'codex', harness_id: 'browser',
+    });
+  });
+
   it('retains a restored rerun ID that is present only in conversation runs', async () => {
     window.history.replaceState(
       null,
@@ -509,6 +541,34 @@ describe('workspace run selection and rerun', () => {
     await waitFor(() =>
       expect(result.current.selection.runId).toBe('run-newest'),
     );
+  });
+
+  it('refreshes Run and Conversation when the canonical run.completed SSE arrives', async () => {
+    window.history.replaceState(
+      null, '', '/?project=project-1&conversation=conversation-1&run=run-active',
+    );
+    const detail = conversation('conversation-1', ['run-active']);
+    detail.runs[0] = run('run-active', 'running');
+    vi.mocked(getConversation).mockResolvedValue(detail);
+    vi.mocked(getRun).mockResolvedValue(run('run-active', 'running'));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [], attempts: [], usage: [], operation_evidence: [], derived_nodes: [],
+    });
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.run?.status).toBe('running'));
+    const reads = vi.mocked(getConversation).mock.calls.length;
+    detail.runs[0] = run('run-active', 'succeeded');
+    vi.mocked(getRun).mockResolvedValue(run('run-active', 'succeeded'));
+    await act(async () => {
+      FakeEventSource.instances.at(-1)?.listeners.get('run.completed')?.(
+        new MessageEvent('run.completed', {
+          data: JSON.stringify({ run_id: 'run-active', status: 'succeeded' }),
+          lastEventId: '20',
+        }),
+      );
+    });
+    await waitFor(() => expect(result.current.run?.status).toBe('succeeded'));
+    expect(vi.mocked(getConversation).mock.calls.length).toBeGreaterThan(reads);
   });
 
   it('reruns the selected failed Run, refreshes, selects it, and opens its stream', async () => {

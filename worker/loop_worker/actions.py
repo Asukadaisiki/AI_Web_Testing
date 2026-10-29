@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from playwright.async_api import Locator, Page
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -21,6 +24,7 @@ from .contracts import (
     LocatorSpec,
 )
 from .locators import LocatorResolutionError, to_playwright_locator
+from .uploads import UploadRejected, read_upload
 
 #: 动作后等待页面稳定的上限（load / networkidle）
 STABLE_LOAD_TIMEOUT_MS = 3000
@@ -228,7 +232,8 @@ async def fill_target(
     except PlaywrightTimeoutError as exc:
         raise step_timeout(f"input timed out after {timeout_ms}ms") from exc
     except PlaywrightError as exc:
-        raise worker_error(f"input failed: {exc}") from exc
+        # Playwright call logs may contain the submitted password.
+        raise worker_error("input failed") from exc
     await wait_for_stable(page)
 
 
@@ -310,11 +315,19 @@ async def dismiss_dialog(page: Page, locator: Locator, timeout_ms: int) -> None:
 
 
 async def upload_file_target(
-    page: Page, locator: Locator, file_path: str, timeout_ms: int
+    page: Page, locator: Locator, file_path: str, timeout_ms: int,
+    *, upload_root: Path | None = None,
 ) -> list[RecoveryAttempt]:
+    if upload_root is None:
+        configured = os.environ.get("LOOP_UPLOADS_DIR")
+        upload_root = Path(configured) if configured else None
+    try:
+        payload = read_upload(file_path, upload_root)
+    except UploadRejected as exc:
+        raise ActionFailure("upload_rejected", str(exc)) from exc
     recovery = await ensure_actionable(page, locator, timeout_ms)
     try:
-        await locator.set_input_files(file_path, timeout=timeout_ms)
+        await locator.set_input_files(payload, timeout=timeout_ms)
     except PlaywrightTimeoutError as exc:
         raise step_timeout(f"upload_file timed out after {timeout_ms}ms") from exc
     except PlaywrightError as exc:

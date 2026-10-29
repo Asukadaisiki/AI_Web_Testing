@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   fixtureCleanupDiagnostics,
@@ -8,46 +9,90 @@ import {
   type FixtureCleanupState,
 } from '../test-utils/fixture-cleanup';
 
-const canonicalGoal =
-  'Filter alpha, add two items to the cart, and verify the cart summary.';
-const screenshots = resolve(process.cwd(), '..', 'artifacts', 'ui');
-const cleanupAPIRoot = process.env['AGENTTRACE_API_URL'] ?? 'http://127.0.0.1:8080';
+const goalURL = process.env['AGENTTRACE_E2E_GOAL_URL'] ?? 'http://127.0.0.1:8124/index.html';
+let canonicalGoal = process.env['AGENTTRACE_E2E_GOAL'] ??
+  `Open ${goalURL}, verify Alpha is visible using assert_text, then use finish_case to create exactly one minimal case and pass its fresh-context dry run.`;
+const seedRunId = process.env['AGENTTRACE_E2E_SEED_RUN_ID'];
+const screenshots = process.env['AGENTTRACE_E2E_SCREENSHOT_DIR'] ??
+  resolve(tmpdir(), 'agenttrace-native-e2e-ui', `${Date.now()}-${process.pid}`);
+const cleanupAPIRoot = process.env['AGENTTRACE_API_URL'] ?? 'http://127.0.0.1:8180';
+const runTimeoutMS = Number(process.env['AGENTTRACE_E2E_TIMEOUT_MS'] ?? 300_000);
 const cleanupTimeoutMS = 20_000;
 const cleanupPollIntervalMS = 250;
 
 let canonicalRoute = '';
 let fixtureProjectId = '';
 let fixtureProjectName = '';
+let fixtureConversationId = '';
+let operationName = '';
+let modelLabel = '';
 
 interface WaitingRunFixture {
   runId: string;
   messageId: string;
 }
 
+function postgresEnvironment(dsn: string): NodeJS.ProcessEnv {
+  const url = new URL(dsn);
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.hash) {
+    throw new Error('Native E2E PostgreSQL DSN must be a PostgreSQL URI without a fragment');
+  }
+  const parameters: Record<string, string> = {};
+  for (const [key, value] of [
+    ['host', url.hostname.replace(/^\[|\]$/g, '')],
+    ['port', url.port],
+    ['user', url.username],
+    ['password', url.password],
+    ['dbname', url.pathname.replace(/^\//, '')],
+  ]) {
+    if (key && value) parameters[key] = decodeURIComponent(value);
+  }
+  for (const [key, value] of url.searchParams) parameters[key] = value;
+  const variables: Record<string, string> = {
+    host: 'PGHOST', hostaddr: 'PGHOSTADDR', port: 'PGPORT', user: 'PGUSER',
+    password: 'PGPASSWORD', dbname: 'PGDATABASE', sslmode: 'PGSSLMODE',
+    sslcert: 'PGSSLCERT', sslkey: 'PGSSLKEY', sslrootcert: 'PGSSLROOTCERT',
+    sslcrl: 'PGSSLCRL', sslcrldir: 'PGSSLCRLDIR',
+    ssl_min_protocol_version: 'PGSSLMINPROTOCOLVERSION',
+    ssl_max_protocol_version: 'PGSSLMAXPROTOCOLVERSION',
+    connect_timeout: 'PGCONNECT_TIMEOUT', options: 'PGOPTIONS',
+    application_name: 'PGAPPNAME', client_encoding: 'PGCLIENTENCODING',
+    target_session_attrs: 'PGTARGETSESSIONATTRS', channel_binding: 'PGCHANNELBINDING',
+    gssencmode: 'PGGSSENCMODE', krbsrvname: 'PGKRBSRVNAME',
+    passfile: 'PGPASSFILE', service: 'PGSERVICE',
+  };
+  const env = { ...process.env };
+  for (const [key, value] of Object.entries(parameters)) {
+    const variable = variables[key];
+    if (!variable) throw new Error('Unsupported native E2E PostgreSQL connection option');
+    env[variable] = value;
+  }
+  return env;
+}
+
 function executeFixtureSQL(sql: string): string {
-  return execFileSync(
-    'docker',
-    [
-      'compose',
-      '-f',
-      resolve(process.cwd(), '..', 'compose.yaml'),
-      'exec',
-      '-T',
-      'postgres',
+  const dsn = process.env['AGENTTRACE_E2E_POSTGRES_DSN'];
+  if (!dsn) throw new Error('AGENTTRACE_E2E_POSTGRES_DSN is required for native E2E fixtures');
+  try {
+    return execFileSync(
       'psql',
-      '-U',
-      'agenttrace',
-      '-d',
-      'agenttrace',
-      '-At',
-      '-q',
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-c',
-      sql,
-    ],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-  );
+      [
+        '--no-psqlrc',
+        '-At',
+        '-q',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-c',
+        sql,
+      ],
+      {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
+        env: postgresEnvironment(dsn),
+      },
+    );
+  } catch {
+    throw new Error('Native fixture SQL failed; connection details and SQL diagnostics suppressed');
+  }
 }
 
 function createWaitingRun(
@@ -55,12 +100,16 @@ function createWaitingRun(
   status: 'waiting_input' | 'waiting_approval',
 ): WaitingRunFixture {
   expect(sourceRunId).toMatch(/^run_[a-zA-Z0-9]+$/);
+  expect(fixtureProjectId).toMatch(/^prj_[a-zA-Z0-9]+$/);
+  expect(fixtureConversationId).toMatch(/^conv_[a-zA-Z0-9]+$/);
   const runId = `run_e2e${crypto.randomUUID().replaceAll('-', '')}`;
   const messageId = `msg_e2e${crypto.randomUUID().replaceAll('-', '')}`;
-  const stateLabel = status === 'waiting_input' ? 'input' : 'approval';
   const output = executeFixtureSQL(`BEGIN;
     WITH source AS (
-      SELECT project_id, conversation_id, specification
+      SELECT '${fixtureProjectId}'::text AS project_id,
+        '${fixtureConversationId}'::text AS conversation_id,
+        jsonb_set(specification, '{command,conversation_id}',
+          to_jsonb('${fixtureConversationId}'::text)) AS specification
       FROM runs
       WHERE id = '${sourceRunId}' AND status = 'succeeded'
     ), next_ordinal AS (
@@ -79,7 +128,7 @@ function createWaitingRun(
           'run_id', '${runId}',
           'ordinal', next_ordinal.ordinal,
           'role', 'user',
-          'content', 'E2E fixture waiting for ${stateLabel}.',
+          'content', ${sqlText(canonicalGoal)},
           'metadata', jsonb_build_object('fixture', 'task-13'),
           'created_at', now()
         ))
@@ -88,9 +137,10 @@ function createWaitingRun(
     INSERT INTO messages (id, conversation_id, run_id, ordinal, role, content, metadata)
     SELECT '${messageId}', conversation_id, id,
       (specification #>> '{command,messages,0,ordinal}')::bigint,
-      'user', 'E2E fixture waiting for ${stateLabel}.', '{"fixture":"task-13"}'::jsonb
+      'user', ${sqlText(canonicalGoal)}, '{"fixture":"task-13"}'::jsonb
     FROM runs
     WHERE id = '${runId}';
+    UPDATE runs SET source_message_id = '${messageId}' WHERE id = '${runId}';
     SELECT fixture.id, fixture.specification #>> '{command,run_id}',
       fixture.specification #>> '{command,messages,0,id}'
     FROM runs AS fixture
@@ -100,8 +150,14 @@ function createWaitingRun(
   return { runId, messageId };
 }
 
+function sqlText(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 function routeForRun(runId: string): string {
   const url = new URL(`http://agenttrace.local${canonicalRoute}`);
+  url.searchParams.set('project', fixtureProjectId);
+  url.searchParams.set('conversation', fixtureConversationId);
   url.searchParams.set('run', runId);
   url.searchParams.delete('span');
   return `${url.pathname}${url.search}`;
@@ -337,7 +393,7 @@ async function expectNoBoxOverlap(first: Locator, second: Locator): Promise<void
 
 async function expectSelectedModelIsFullyVisible(select: Locator): Promise<void> {
   const selectedText = await select.locator('option:checked').textContent();
-  expect(selectedText).toBe('Browser evaluation');
+  expect(selectedText).toBe(modelLabel);
   await expect(select).toHaveValue(await select.inputValue());
   await expect
     .poll(() =>
@@ -387,9 +443,15 @@ async function createCanonicalWorkspace(page: Page): Promise<void> {
   await expect(page.getByRole('main', { name: 'Conversation workspace' })).toContainText(
     conversationTitle,
   );
+  fixtureConversationId = new URL(page.url()).searchParams.get('conversation') ?? '';
+  expect(fixtureConversationId).toMatch(/^conv_[a-zA-Z0-9]+$/);
 }
 
 test.describe.serial('AgentTrace workspace', () => {
+  test.beforeAll(() => {
+    expect(executeFixtureSQL('SELECT 1;').trim()).toBe('1');
+  });
+
   test.afterAll(async () => {
     await cleanupFixtureProject();
   });
@@ -406,7 +468,19 @@ test.describe.serial('AgentTrace workspace', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');
     await expect(page.getByRole('status', { name: 'Loading workspace...' })).toBeHidden();
+    const runtimesResponse = await page.request.get(`${cleanupAPIRoot}/api/v1/runtimes`);
+    expect(runtimesResponse.ok()).toBe(true);
+    const { runtimes } = await runtimesResponse.json();
+    const runtime = runtimes.find((item: { id: string; model: { provider: string; name: string } }) =>
+      item.id === 'pi' && item.model.provider === 'openai-compatible' &&
+      item.model.name === 'glm-5.3-flash');
+    expect(runtime, 'GET /runtimes must advertise the real Pi GLM model').toBeDefined();
     await createCanonicalWorkspace(page);
+    await page.getByRole('combobox', { name: 'Runtime', exact: true }).selectOption(runtime.id);
+    await page.getByRole('combobox', { name: 'Harness', exact: true }).selectOption('browser-harness');
+    modelLabel = await page.getByRole('combobox', { name: 'Model' })
+      .locator('option:checked').innerText();
+    expect(modelLabel).toContain(runtime.model.name);
 
     const projects = page.getByRole('complementary', { name: 'Projects and conversations' });
     const conversation = page.getByRole('main', { name: 'Conversation workspace' });
@@ -418,39 +492,80 @@ test.describe.serial('AgentTrace workspace', () => {
     await expectNoOverlap(conversation, trace);
     await expectSelectedModelIsFullyVisible(page.getByRole('combobox', { name: 'Model' }));
 
-    await page.getByRole('textbox', { name: 'Evaluation message' }).fill(canonicalGoal);
-    await page.getByRole('button', { name: 'Send message' }).click();
-    await expect(page.getByLabel(/Current run (queued|running|succeeded)/)).toBeVisible();
+    if (seedRunId) {
+      expect(seedRunId).toMatch(/^run_[a-zA-Z0-9]+$/);
+      const response = await page.request.get(`${cleanupAPIRoot}/api/v1/runs/${seedRunId}`);
+      expect(response.ok()).toBe(true);
+      const seed = await response.json();
+      expect(seed.status).toBe('succeeded');
+      canonicalGoal = executeFixtureSQL(
+        `SELECT content FROM messages WHERE id = (
+          SELECT source_message_id FROM runs WHERE id = '${seedRunId}'
+        );`,
+      ).trim();
+      expect(canonicalGoal).not.toBe('');
+      await page.goto(`/?project=${seed.project_id}&conversation=${seed.conversation_id}&run=${seedRunId}`);
+    } else {
+      await page.getByRole('textbox', { name: 'Evaluation message' }).fill(canonicalGoal);
+      const submitted = page.waitForRequest((request) =>
+        request.method() === 'POST' && request.url().endsWith('/messages'));
+      await page.getByRole('button', { name: 'Send message' }).click();
+      expect((await submitted).postDataJSON()).toMatchObject({
+        runtime_id: 'pi', harness_id: 'browser-harness',
+        model: { provider: 'openai-compatible', name: 'glm-5.3-flash' },
+      });
+    }
     await expect(trace.getByText('Live', { exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Run completed' })).toBeVisible({
-      timeout: 80_000,
+    await expect(page.getByRole('region', { name: 'Run completed' }).last()).toBeVisible({
+      timeout: runTimeoutMS,
     });
-    await expect(conversation.getByRole('button', { name: 'Attempt 1' })).toBeVisible();
+    const runId = new URL(page.url()).searchParams.get('run');
+    const runResponse = await page.request.get(`${cleanupAPIRoot}/api/v1/runs/${runId}`);
+    expect(runResponse.ok()).toBe(true);
+    const selectedRun = await runResponse.json();
+    const composition = page.getByLabel('Run composition');
+    await expect(composition).toContainText(`Runtime ${selectedRun.runtime_id}`);
+    await expect(composition).toContainText(`Harness ${selectedRun.harness_id} (r${selectedRun.harness_revision})`);
+    await expect(conversation.locator(`[aria-describedby="attempt-${runId}-metadata"]`))
+      .toHaveAttribute('aria-pressed', 'true');
     await expect(conversation.locator('.message-block time').first()).toHaveText(
       /\d{2}:\d{2}:\d{2}/,
     );
 
-    await trace.getByRole('button', { name: 'Select plan' }).click();
-    const planDetails = page.getByRole('article', { name: 'Trace details for plan' });
-    await expect(planDetails.getByText('Decision context', { exact: true })).toBeVisible();
-    await expect(planDetails).toContainText('browser_execute_case');
+    const traceResponse = await page.request.get(`${cleanupAPIRoot}/api/v1/runs/${runId}/trace`);
+    expect(traceResponse.ok()).toBe(true);
+    const nativeTrace = await traceResponse.json();
+    const model = nativeTrace.spans.find((span: { kind: string; input?: unknown }) =>
+      span.kind === 'model' && span.input);
+    expect(model).toBeDefined();
+    await trace.getByRole('button', { name: `Select ${model.name}`, exact: true }).first().click();
+    const planDetails = page.getByRole('article', { name: `Trace details for ${model.name}` });
+    await planDetails.getByText('Planner / case input', { exact: true }).click();
+    await expect(planDetails).toContainText(canonicalGoal);
+    await planDetails.getByText('Usage', { exact: true }).click();
+    await expect(planDetails).toContainText('input_tokens');
 
+    const evidenceOperation = nativeTrace.spans.find((span: { id: string; kind: string; name: string }) =>
+      span.kind === 'operation' && span.name.includes('finish_case') &&
+      nativeTrace.operation_evidence.some((evidence: { span_id: string }) => evidence.span_id === span.id));
+    expect(evidenceOperation, 'real run must have finish_case execution evidence').toBeDefined();
+    operationName = evidenceOperation.name;
     const operation = page.getByRole('treeitem', {
-      name: 'operation',
+      name: operationName,
       exact: true,
     });
     await expect(operation).toBeVisible();
     await operation.click();
     const details = page.getByRole('article', {
-      name: 'Trace details for operation',
+      name: `Trace details for ${operationName}`,
     });
     await expect(details).toBeVisible();
     await details.getByText('Execution evidence', { exact: true }).click();
     await details.getByText('Planner / case input', { exact: true }).click();
     await details.getByText('Canonical output', { exact: true }).click();
     await expect(details).toContainText('Attempt 1');
-    await expect(details).toContainText('Filter alpha');
-    await expect(details).toContainText('Alpha x 2');
+    await expect(details).toContainText('succeeded');
+    await expect(details).toContainText('case');
     await expect(details).toContainText('artifacts');
 
     await page.screenshot({
@@ -471,7 +586,7 @@ test.describe.serial('AgentTrace workspace', () => {
       canonicalGoal,
     );
     await expect(page.getByRole('article', {
-      name: 'Trace details for operation',
+      name: `Trace details for ${operationName}`,
     })).toBeVisible();
     expect(consoleErrors).toEqual([]);
   });
@@ -510,13 +625,17 @@ test.describe.serial('AgentTrace workspace', () => {
     const conversation = page.getByRole('main', { name: 'Conversation workspace' });
     await expect(conversation).toBeVisible();
     await expectPaneBodyFitsViewport(page, conversation);
-    const agent = page.getByRole('combobox', { name: 'Agent' }).locator('xpath=..');
+    const runtime = page.getByRole('combobox', { name: 'Runtime', exact: true }).locator('xpath=..');
     const model = page.getByRole('combobox', { name: 'Model' }).locator('xpath=..');
+    const harness = page.getByRole('combobox', { name: 'Harness', exact: true }).locator('xpath=..');
     const send = page.getByRole('button', { name: 'Send message' });
     await expectSelectedModelIsFullyVisible(page.getByRole('combobox', { name: 'Model' }));
-    await expectNoBoxOverlap(agent, model);
-    await expectNoBoxOverlap(agent, send);
+    await expectNoBoxOverlap(runtime, model);
+    await expectNoBoxOverlap(runtime, harness);
+    await expectNoBoxOverlap(runtime, send);
+    await expectNoBoxOverlap(model, harness);
     await expectNoBoxOverlap(model, send);
+    await expectNoBoxOverlap(harness, send);
     await page.getByRole('button', { name: 'Show trace' }).click();
     const trace = page.getByRole('complementary', { name: 'Run trace and details' });
     await expect(trace).toBeVisible();
@@ -544,16 +663,18 @@ test.describe.serial('AgentTrace workspace', () => {
     const inputWait = page.getByRole('region', { name: 'Run waiting for input' });
     await expect(inputWait).toBeVisible();
     await page.getByRole('textbox', { name: 'Response to agent question' }).fill(
-      'Use the alpha item quantity of two.',
+      canonicalGoal,
     );
     await inputWait.getByRole('button', { name: 'Continue' }).click();
     await expect(inputWait).toBeHidden();
-    await expect(page.getByRole('region', { name: 'Run completed' })).toBeVisible({
-      timeout: 80_000,
+    await expect.poll(() => readRunStatus(inputFixture.runId), { timeout: runTimeoutMS })
+      .toBe('succeeded');
+    await expect(page.getByRole('region', { name: 'Run completed' }).last()).toBeVisible({
+      timeout: runTimeoutMS,
     });
     await page.reload();
     await expect(page.getByRole('main', { name: 'Conversation workspace' })).toContainText(
-      'Use the alpha item quantity of two.',
+      canonicalGoal,
     );
 
     const approvalFixture = createWaitingRun(sourceRunId, 'waiting_approval');
@@ -566,8 +687,10 @@ test.describe.serial('AgentTrace workspace', () => {
     await expect(approvalWait).toBeVisible();
     await approvalWait.getByRole('button', { name: 'Approve' }).click();
     await expect(approvalWait).toBeHidden();
-    await expect(page.getByRole('region', { name: 'Run completed' })).toBeVisible({
-      timeout: 80_000,
+    await expect.poll(() => readRunStatus(approvalFixture.runId), { timeout: runTimeoutMS })
+      .toBe('succeeded');
+    await expect(page.getByRole('region', { name: 'Run completed' }).last()).toBeVisible({
+      timeout: runTimeoutMS,
     });
     await page.reload();
     await expect(page.getByRole('main', { name: 'Conversation workspace' })).toContainText(

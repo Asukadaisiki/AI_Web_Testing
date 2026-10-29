@@ -14,7 +14,6 @@ import (
 	inboxconsumer "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 )
 
 const (
@@ -22,6 +21,8 @@ const (
 	runCommandSchema = "agenttrace.run-command.v1"
 	defaultDLQTopic  = "agenttrace.run.dlq.v1"
 )
+
+var ErrConsumerPaused = errors.New("runtime consumer is paused")
 
 // CommandRunner processes one immutable run command.
 type CommandRunner interface {
@@ -55,12 +56,12 @@ type DLQHandoff struct {
 	Payload []byte
 }
 
-// DeduplicatedInbox adapts the Task 4 PostgreSQL inbox primitive.
+// DeduplicatedInbox adapts durable short inbox claims for external execution.
 type DeduplicatedInbox struct {
 	Deduplicator *inboxconsumer.Deduplicator
 }
 
-// Handle applies handler only to the first successful event ID delivery.
+// Handle serializes active deliveries without holding a transaction during handler.
 func (i DeduplicatedInbox) Handle(
 	ctx context.Context,
 	message eventbus.Message,
@@ -69,9 +70,7 @@ func (i DeduplicatedInbox) Handle(
 	if i.Deduplicator == nil {
 		return errors.New("runtime inbox deduplicator is required")
 	}
-	return i.Deduplicator.Handle(ctx, message, func(ctx context.Context, _ inboxconsumer.Tx, _ eventbus.Message) error {
-		return handler(ctx)
-	})
+	return i.Deduplicator.HandleExternal(ctx, message, handler)
 }
 
 // Consumer accepts one versioned Kafka command and invokes a checkpointed engine.
@@ -80,11 +79,11 @@ type Consumer struct {
 	Runner      CommandRunner
 	Publisher   eventbus.EventBus
 	RetryStore  RetryStore
-	Live        live.LiveStore
-	LeaseOwner  string
-	LeaseTTL    time.Duration
 	MaxAttempts int
 	DLQTopic    string
+	// Ready controls partition ownership, not delivery retries. A false/error
+	// result leaves the record uncommitted so another runtime can consume it.
+	Ready func(context.Context) (bool, error)
 
 	mu       sync.Mutex
 	attempts map[string]int
@@ -98,7 +97,44 @@ func (c *Consumer) Consume(ctx context.Context, bus eventbus.EventBus, group str
 	if strings.TrimSpace(group) == "" {
 		return errors.New("runtime consumer group is required")
 	}
-	return bus.Consume(ctx, runCommandTopic, group, c.Handle)
+	if err := c.checkReady(ctx); err != nil {
+		return err
+	}
+	return bus.Consume(ctx, runCommandTopic, group, func(deliveryCtx context.Context, message eventbus.Message) error {
+		for {
+			if err := deliveryCtx.Err(); err != nil {
+				return err
+			}
+			if err := c.checkReady(deliveryCtx); err != nil {
+				return err
+			}
+			err := c.Handle(deliveryCtx, message)
+			if !inboxconsumer.IsDeliveryDeferred(err) {
+				return err
+			}
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-deliveryCtx.Done():
+				timer.Stop()
+				return deliveryCtx.Err()
+			case <-timer.C:
+			}
+		}
+	})
+}
+
+func (c *Consumer) checkReady(ctx context.Context) error {
+	if c.Ready == nil {
+		return nil
+	}
+	ready, err := c.Ready(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConsumerPaused, err)
+	}
+	if !ready {
+		return ErrConsumerPaused
+	}
+	return nil
 }
 
 // Handle processes one Kafka record. It accepts only agenttrace.run-command.v1.
@@ -124,8 +160,6 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 		return c.recordFailure(ctx, eventID, message, errors.New("runtime command runner is required"))
 	}
 	err = c.Inbox.Handle(ctx, normalizedMessage, func(runCtx context.Context) error {
-		stopLease := c.renewLease(runCtx, command.RunID)
-		defer stopLease()
 		runErr := c.Runner.Run(runCtx, command)
 		if isTerminalRunError(runErr) {
 			return nil
@@ -133,6 +167,9 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 		return runErr
 	})
 	if err != nil {
+		if inboxconsumer.IsDeliveryDeferred(err) {
+			return err
+		}
 		return c.recordFailure(ctx, eventID, message, err)
 	}
 	if err := c.clearAttempts(ctx, eventID); err != nil {
@@ -226,33 +263,6 @@ func retryEventID(eventID string, message eventbus.Message) string {
 	return stableID("consumer-retry", message.Topic, message.Key, string(message.Value))
 }
 
-func (c *Consumer) renewLease(ctx context.Context, runID string) func() {
-	if c.Live == nil || strings.TrimSpace(c.LeaseOwner) == "" {
-		return func() {}
-	}
-	ttl := c.LeaseTTL
-	if ttl <= 0 {
-		ttl = live.LeaseTTL
-	}
-	_ = c.Live.SetLease(ctx, runID, c.LeaseOwner, ttl)
-	stop := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(maxDuration(ttl/2, time.Second))
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stop:
-				return
-			case <-ticker.C:
-				_ = c.Live.SetLease(ctx, runID, c.LeaseOwner, ttl)
-			}
-		}
-	}()
-	return func() { close(stop) }
-}
-
 func (c *Consumer) incrementAttempts(ctx context.Context, eventID string, payload []byte) (RetryIncrement, error) {
 	if c.RetryStore != nil {
 		return c.RetryStore.Increment(ctx, eventID, payload)
@@ -295,13 +305,6 @@ func (c *Consumer) dlqTopic() string {
 		return defaultDLQTopic
 	}
 	return c.DLQTopic
-}
-
-func maxDuration(left, right time.Duration) time.Duration {
-	if left > right {
-		return left
-	}
-	return right
 }
 
 func stableID(prefix string, values ...string) string {

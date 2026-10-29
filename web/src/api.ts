@@ -52,6 +52,9 @@ export interface Run {
   conversation_id: string;
   source_message_id: string;
   retry_of_run_id?: string;
+  runtime_id?: RuntimeId;
+  harness_id?: string;
+  harness_revision?: number;
   status: RunStatus;
   checkpoint_version: number;
   cancel_requested_at?: string;
@@ -172,6 +175,47 @@ export interface Health {
 export interface ModelRef {
   provider: string;
   name: string;
+  reasoning_effort?: string;
+}
+
+export type RuntimeId = 'pi' | 'claude-code' | 'codex';
+
+export interface Runtime {
+  id: RuntimeId;
+  name: string;
+  model: ModelRef;
+  available: boolean;
+  unavailable_reason?: string;
+}
+
+export interface HarnessSkill {
+  name: string;
+  content: string;
+  files?: { path: string; content: string }[];
+}
+
+export interface HarnessMCPServer {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  host_only_tools?: string[];
+}
+
+export interface HarnessDefinition {
+  name: string;
+  system_prompt: string;
+  skills: HarnessSkill[];
+  mcp: Record<string, HarnessMCPServer>;
+}
+
+export interface HarnessSnapshot extends HarnessDefinition {
+  id: string;
+  revision: number;
+}
+
+export interface ExecutionSelection {
+  runtime_id: RuntimeId;
+  harness_id: string;
 }
 
 export interface Agent {
@@ -192,6 +236,8 @@ export interface CreateMessageRequest {
   agent_id: string;
   model: ModelRef;
   idempotency_key: string;
+  runtime_id?: RuntimeId;
+  harness_id?: string;
 }
 
 export interface CreateMessageResponse {
@@ -280,6 +326,14 @@ function numberValue(value: unknown, status: number, at: string): number {
   return value;
 }
 
+function revisionValue(value: unknown, status: number, at: string): number {
+  const revision = numberValue(value, status, at);
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    return invalidResponse(status, at, 'a positive integer');
+  }
+  return revision;
+}
+
 function optionalString(
   value: unknown,
   status: number,
@@ -355,6 +409,7 @@ const spanKinds: readonly SpanKind[] = [
 ];
 
 const derivedTraceKinds: readonly DerivedTraceKind[] = ['step', 'unknown_tool'];
+const runtimeIds: readonly RuntimeId[] = ['pi', 'claude-code', 'codex'];
 
 function parseProject(value: unknown, status: number, at = 'project'): Project {
   const item = recordValue(value, status, at);
@@ -425,6 +480,13 @@ function parseRun(value: unknown, status: number, at = 'run'): Run {
       status,
       `${at}.retry_of_run_id`,
     ),
+    runtime_id: item['runtime_id'] == null
+      ? undefined
+      : enumValue(item['runtime_id'], runtimeIds, status, `${at}.runtime_id`),
+    harness_id: optionalString(item['harness_id'], status, `${at}.harness_id`),
+    harness_revision: item['harness_revision'] == null
+      ? undefined
+      : revisionValue(item['harness_revision'], status, `${at}.harness_revision`),
     status: enumValue(item['status'], runStatuses, status, `${at}.status`),
     checkpoint_version: numberValue(
       item['checkpoint_version'],
@@ -718,6 +780,91 @@ function parseAgent(value: unknown, status: number, at: string): Agent {
   };
 }
 
+function parseRuntime(value: unknown, status: number, at: string): Runtime {
+  const item = recordValue(value, status, at);
+  const model = recordValue(item['model'], status, `${at}.model`);
+  const available = item['available'];
+  if (typeof available !== 'boolean') {
+    return invalidResponse(status, `${at}.available`, 'a boolean');
+  }
+  return {
+    id: enumValue(item['id'], runtimeIds, status, `${at}.id`),
+    name: stringValue(item['name'], status, `${at}.name`),
+    available,
+    unavailable_reason: optionalString(item['unavailable_reason'], status, `${at}.unavailable_reason`),
+    model: {
+      provider: stringValue(model['provider'], status, `${at}.model.provider`),
+      name: stringValue(model['name'], status, `${at}.model.name`),
+      reasoning_effort: optionalString(model['reasoning_effort'], status, `${at}.model.reasoning_effort`),
+    },
+  };
+}
+
+function stringArray(value: unknown, status: number, at: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  return arrayValue(value, status, at).map((item, index) =>
+    stringValue(item, status, `${at}[${String(index)}]`),
+  );
+}
+
+export function parseHarnessDefinition(
+  value: unknown,
+  status = 0,
+  at = 'harness',
+): HarnessDefinition {
+  const item = recordValue(value, status, at);
+  const servers = recordValue(item['mcp'], status, `${at}.mcp`);
+  return {
+    name: stringValue(item['name'], status, `${at}.name`),
+    system_prompt: stringValue(item['system_prompt'], status, `${at}.system_prompt`),
+    skills: arrayValue(item['skills'], status, `${at}.skills`).map((raw, index) => {
+      const path = `${at}.skills[${String(index)}]`;
+      const skill = recordValue(raw, status, path);
+      return {
+        name: stringValue(skill['name'], status, `${path}.name`),
+        content: stringValue(skill['content'], status, `${path}.content`),
+        ...(skill['files'] === undefined ? {} : {
+          files: arrayValue(skill['files'], status, `${path}.files`).map((rawFile, fileIndex) => {
+            const filePath = `${path}.files[${String(fileIndex)}]`;
+            const file = recordValue(rawFile, status, filePath);
+            return {
+              path: stringValue(file['path'], status, `${filePath}.path`),
+              content: stringValue(file['content'], status, `${filePath}.content`),
+            };
+          }),
+        }),
+      };
+    }),
+    mcp: Object.fromEntries(Object.entries(servers).map(([name, raw]) => {
+      const path = `${at}.mcp.${name}`;
+      const server = recordValue(raw, status, path);
+      return [name, {
+        command: stringValue(server['command'], status, `${path}.command`),
+        ...(server['args'] === undefined ? {} : { args: stringArray(server['args'], status, `${path}.args`) }),
+        ...(server['host_only_tools'] === undefined ? {} : {
+          host_only_tools: stringArray(server['host_only_tools'], status, `${path}.host_only_tools`),
+        }),
+        ...(server['env'] === undefined ? {} : {
+          env: Object.fromEntries(
+            Object.entries(recordValue(server['env'], status, `${path}.env`)).map(([key, rawValue]) => [
+              key, stringValue(rawValue, status, `${path}.env.${key}`),
+            ]),
+          ),
+        }),
+      }];
+    })),
+  };
+}
+
+function parseHarnessSnapshot(value: unknown, status: number, at = 'harness'): HarnessSnapshot {
+  const item = recordValue(value, status, at);
+  return {
+    ...parseHarnessDefinition(value, status, at),
+    id: stringValue(item['id'], status, `${at}.id`),
+    revision: revisionValue(item['revision'], status, `${at}.revision`),
+  };
+}
+
 function parseHealth(value: unknown, status: number): Health {
   const item = recordValue(value, status, 'health');
   const dependencies = recordValue(item['dependencies'], status, 'health.dependencies');
@@ -947,6 +1094,44 @@ export async function listAgents(): Promise<Agent[]> {
       parseAgent(agent, status, `agents[${String(index)}]`),
     );
   });
+}
+
+export function listRuntimes(): Promise<Runtime[]> {
+  return requestJSON('/runtimes', (value, status) => {
+    const response = recordValue(value, status, 'response');
+    return arrayValue(response['runtimes'], status, 'runtimes').map((item, index) =>
+      parseRuntime(item, status, `runtimes[${String(index)}]`),
+    );
+  });
+}
+
+export function listHarnesses(): Promise<HarnessSnapshot[]> {
+  return requestJSON('/harnesses', (value, status) => {
+    const response = recordValue(value, status, 'response');
+    return arrayValue(response['harnesses'], status, 'harnesses').map((item, index) =>
+      parseHarnessSnapshot(item, status, `harnesses[${String(index)}]`),
+    );
+  });
+}
+
+export function createHarness(definition: HarnessDefinition): Promise<HarnessSnapshot> {
+  return postJSON('/harnesses', definition, parseHarnessSnapshot);
+}
+
+export function updateHarness(id: string, definition: HarnessDefinition): Promise<HarnessSnapshot> {
+  return requestJSON(`/harnesses/${encodeURIComponent(id)}`, parseHarnessSnapshot, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(definition),
+  });
+}
+
+export function deleteHarness(id: string): Promise<void> {
+  return requestJSON(`/harnesses/${encodeURIComponent(id)}`, (value, status) => {
+    if (status === 204) return;
+    if (status !== 200) return invalidResponse(status, 'delete_harness', 'HTTP 200 or 204');
+    parseHarnessSnapshot(value, status);
+  }, { method: 'DELETE' });
 }
 
 export function getHealth(): Promise<Health> {

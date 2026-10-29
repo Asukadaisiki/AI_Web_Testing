@@ -1,0 +1,132 @@
+{
+  "date": "2026-10-28",
+  "status": "accepted",
+  "primary_ui": "Langfuse",
+  "deployment": {
+    "mode": "native",
+    "docker": false,
+    "langfuse_url": "http://localhost:3300",
+    "dist": ".next-first-loop-20261028-b",
+    "langfuse_project_id": "agenttrace-native-project",
+    "agenttrace_project_id": "prj_7947f1c9add6acdf4fd26a01b2872b97",
+    "agenttrace_conversation_id": "conv_8b365a5b14fa99401b1ad864ccdc591b"
+  },
+  "generic_runtime_runs": [
+    {
+      "runtime": "pi",
+      "run_id": "run_bff0299875cad52a2af7f1b618e09968",
+      "status": "succeeded",
+      "total_tokens": 286
+    },
+    {
+      "runtime": "claude-code",
+      "run_id": "run_bcb60b4f2dcf6df105a9ac56e4db79a7",
+      "status": "succeeded",
+      "total_tokens": 471
+    },
+    {
+      "runtime": "codex",
+      "run_id": "run_2d2ea05d3d0c4ceb3d5d8cf797f46410",
+      "status": "succeeded",
+      "total_tokens": 577
+    }
+  ],
+  "generic_harness": {
+    "id": "har_5702a36aee9f00555a66dbd12d9330ca",
+    "historical_revision": 1,
+    "edited_revision": 2,
+    "deleted": true,
+    "historical_snapshots_unchanged": true
+  },
+  "browser_harness": {
+    "id": "har_2a1a8f3d8c1e4d2101f25ffaa0873278",
+    "historical_revision": 1,
+    "edited_revision": 2,
+    "deleted": true,
+    "historical_snapshots_unchanged": true
+  },
+  "browser_runs": {
+    "success": {
+      "run_id": "run_1a2bf11d67d39e7be1579462fc5d7982",
+      "status": "succeeded",
+      "canonical_counts": {
+        "spans": 12,
+        "attempts": 9,
+        "usage": 4,
+        "operation_evidence": 4,
+        "derived_nodes": 6
+      },
+      "native_trace_visible": true,
+      "loaded_png_images": 4,
+      "image_dimensions": "1280x800"
+    },
+    "cancelled": {
+      "run_id": "run_852bf9c3c837abe487afac3bddde6247",
+      "status": "cancelled",
+      "cancel_requested_at_present": true,
+      "operation_evidence_present": true
+    },
+    "failed": {
+      "run_id": "run_67e64bea11e4cc2b355fadca03339710",
+      "status": "failed"
+    },
+    "rerun": {
+      "run_id": "run_f82001f51ba65301bf55be7c85dcd7f7",
+      "status": "failed",
+      "retry_of_run_id": "run_67e64bea11e4cc2b355fadca03339710",
+      "immutable_snapshot_preserved": true
+    }
+  },
+  "responsive": {
+    "viewport": "390x844",
+    "document_width": 390,
+    "page_fits": true,
+    "dialog_fits": true,
+    "dialog_opaque": true,
+    "run_identity_overlap": false,
+    "table_local_horizontal_scroll": true
+  },
+  "scope_boundary": {
+    "go_health_without_token_http": 200,
+    "go_runtime_without_token_http": 401,
+    "go_bound_run_http": 200,
+    "go_foreign_run_http": 403,
+    "go_forbidden_route_http": 403,
+    "go_foreign_artifact_http": 403,
+    "bff_bound_run_http": 200,
+    "bff_foreign_run_http": 412,
+    "bff_foreign_artifact_http": 412,
+    "bff_arbitrary_artifact_http": 404,
+    "canonical_artifact_http": 200,
+    "canonical_artifact_content_type": "image/png",
+    "canonical_artifact_png_magic": true,
+    "foreign_export_acknowledgements": 1,
+    "foreign_langfuse_trace_http": 404
+  },
+  "verification": {
+    "go_full_suite_passed": true,
+    "targeted_test_files": 15,
+    "targeted_tests_passed": 102,
+    "typecheck_exit_code": 0,
+    "scoped_eslint_exit_code": 0,
+    "launcher_tests_passed": 11,
+    "upstream_client_files_scanned": 681,
+    "private_assets_scanned": 1226,
+    "actual_private_values_scanned": 15,
+    "private_value_hits": 0,
+    "final_review": {
+      "verdict": "approved",
+      "critical": 0,
+      "important": 0,
+      "minor": 0
+    },
+    "final_active_runs": 0,
+    "final_pending_outbox": 0
+  },
+  "limitations": [
+    "Upstream Langfuse Worker retains an open process handle after graceful shutdown.",
+    "SSE and export recovery are bounded and may require visible reconnect or page refresh.",
+    "Accepted-but-lost creation followed by Harness edit/deletion or full reload was not exercised natively.",
+    "Inherited Storybook and Sentry warnings remain."
+  ]
+}

@@ -30,17 +30,21 @@ type Conversation struct {
 	Metadata  json.RawMessage `json:"metadata"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	State     string          `json:"state"`
+	DeletedAt *time.Time      `json:"deleted_at,omitempty"`
 }
 
 type CreateProjectParams struct {
-	Name     string
-	Metadata json.RawMessage
+	Name              string
+	Metadata          json.RawMessage
+	LangfuseProjectID string
 }
 
 type CreateConversationParams struct {
 	ProjectID string
 	Title     string
 	Metadata  json.RawMessage
+	CreatedBy string
 }
 
 // SubmitResponseParams describes a user response to a durable wait state.
@@ -101,6 +105,9 @@ func (s *Store) CreateProject(ctx context.Context, p CreateProjectParams) (Proje
 	if strings.TrimSpace(p.Name) == "" {
 		return Project{}, errors.New("project name is required")
 	}
+	if s.ManagementEnabled() || p.LangfuseProjectID != "" {
+		return s.createBoundProject(ctx, p)
+	}
 	id, err := newID("prj")
 	if err != nil {
 		return Project{}, err
@@ -121,9 +128,9 @@ func (s *Store) ListConversations(ctx context.Context, projectID string) ([]Conv
 		return nil, errors.New("postgres store is not configured")
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, project_id, COALESCE(title, ''), metadata, created_at, updated_at
+		SELECT id, project_id, COALESCE(title, ''), metadata, created_at, updated_at, state, deleted_at
 		FROM conversations
-		WHERE project_id = $1
+		WHERE project_id = $1 AND state <> 'deleted'
 		ORDER BY created_at, id`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -159,6 +166,15 @@ func (s *Store) CreateConversation(ctx context.Context, p CreateConversationPara
 	if err := lockProject(ctx, tx, p.ProjectID); err != nil {
 		return Conversation{}, err
 	}
+	if s.ManagementEnabled() {
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_bindings WHERE agenttrace_project_id = $1 AND status = 'active')`, p.ProjectID).Scan(&active); err != nil {
+			return Conversation{}, err
+		}
+		if !active {
+			return Conversation{}, ErrConflict
+		}
+	}
 	id, err := newID("conv")
 	if err != nil {
 		return Conversation{}, err
@@ -166,10 +182,15 @@ func (s *Store) CreateConversation(ctx context.Context, p CreateConversationPara
 	conversation, err := scanConversation(tx.QueryRow(ctx, `
 		INSERT INTO conversations (id, project_id, title, metadata)
 		VALUES ($1, $2, NULLIF($3, ''), $4::jsonb)
-		RETURNING id, project_id, COALESCE(title, ''), metadata, created_at, updated_at`,
+		RETURNING id, project_id, COALESCE(title, ''), metadata, created_at, updated_at, state, deleted_at`,
 		id, p.ProjectID, p.Title, requiredJSON(p.Metadata, `{}`)))
 	if err != nil {
 		return Conversation{}, fmt.Errorf("create conversation: %w", err)
+	}
+	if s.ManagementEnabled() {
+		if err := createConversationEnvironment(ctx, tx, conversation, p.CreatedBy, s.defaultEnvironmentPolicy()); err != nil {
+			return Conversation{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Conversation{}, fmt.Errorf("commit create conversation: %w", err)
@@ -185,7 +206,7 @@ func (s *Store) GetConversation(
 		return Conversation{}, nil, nil, errors.New("postgres store is not configured")
 	}
 	conversation, err := scanConversation(s.pool.QueryRow(ctx, `
-		SELECT id, project_id, COALESCE(title, ''), metadata, created_at, updated_at
+		SELECT id, project_id, COALESCE(title, ''), metadata, created_at, updated_at, state, deleted_at
 		FROM conversations WHERE id = $1`, conversationID))
 	if err != nil {
 		return Conversation{}, nil, nil, fmt.Errorf("get conversation: %w", err)
@@ -621,7 +642,7 @@ func (s *Store) SubmitResponse(ctx context.Context, p SubmitResponseParams) erro
 		return fmt.Errorf("decode continuation specification: %w", err)
 	}
 	continuation := specification.Command
-	continuation.Messages = []domain.Message{message}
+	continuation.Messages = append(continuation.Messages, message)
 	continuation.CheckpointVersion = run.CheckpointVersion
 	envelopeID, err := newID("evt")
 	if err != nil {
@@ -727,6 +748,7 @@ func scanConversation(row rowScanner) (Conversation, error) {
 	if err := row.Scan(
 		&conversation.ID, &conversation.ProjectID, &conversation.Title, &conversation.Metadata,
 		&conversation.CreatedAt, &conversation.UpdatedAt,
+		&conversation.State, &conversation.DeletedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Conversation{}, ErrNotFound

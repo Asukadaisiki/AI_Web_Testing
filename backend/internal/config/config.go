@@ -5,21 +5,31 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	HTTPAddr           string
-	Postgres           Postgres
-	Kafka              Kafka
-	Redis              Redis
-	WorkerURL          string
-	ArtifactDir        string
-	RuntimeConcurrency int
-	Model              Model
-	Harness            Harness
+	HTTPAddr                string
+	Postgres                Postgres
+	Kafka                   Kafka
+	Redis                   Redis
+	WorkerURL               string
+	ArtifactDir             string
+	BridgeToken             string
+	BridgeProjectID         string
+	BridgeConversationID    string
+	ManagementEnabled       bool
+	BrowserProviderToken    string
+	BrowserAllowedDomains   []string
+	RuntimeConcurrency      int
+	Model                   Model
+	Harness                 Harness
+	BuiltinHarnessDirectory string
+	BuiltinMCPCommand       string
+	BuiltinMCPEntry         string
 }
 
 // Harness configures the pi-browser-harness subprocess that runs browser
@@ -54,22 +64,23 @@ type Redis struct {
 	DB       int
 }
 
-// Model contains runtime-only OpenAI-compatible provider configuration.
-// APIKey is intentionally loaded only from the environment and is never logged.
+// Model separates public execution identity from environment-only credentials.
+// API model selection never depends on APIKey.
 type Model struct {
+	Provider        string
 	BaseURL         string
 	Name            string
 	ReasoningEffort string
 	APIKey          string
-	ScriptPath      string
 }
 
 // Exporter contains only the dependencies used by the optional Langfuse process.
 type Exporter struct {
-	Enabled  bool
-	Postgres Postgres
-	Kafka    Kafka
-	Langfuse Langfuse
+	ExportProjectID string
+	Enabled         bool
+	Postgres        Postgres
+	Kafka           Kafka
+	Langfuse        Langfuse
 }
 
 // Langfuse contains exporter-only provider settings.
@@ -100,6 +111,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	managementEnabled, err := boolEnv("AGENTTRACE_MANAGEMENT_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 
 	redisAddr := strings.TrimSpace(os.Getenv("AGENTTRACE_REDIS_ADDR"))
 	harnessTimeout, err := durationEnv("AGENTTRACE_PI_HARNESS_TIMEOUT", 20*time.Minute)
@@ -118,7 +133,12 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Config{
+	provider := envOr("AGENTTRACE_MODEL_PROVIDER", "openai-compatible")
+	if provider != "openai-compatible" && provider != "scripted" {
+		return Config{}, fmt.Errorf("AGENTTRACE_MODEL_PROVIDER must be openai-compatible or scripted")
+	}
+	builtinDirectory := envOr("AGENTTRACE_BUILTIN_HARNESS_DIR", "../pi-browser-harness/resources")
+	cfg := Config{
 		HTTPAddr: envOr("AGENTTRACE_HTTP_ADDR", ":8080"),
 		Postgres: Postgres{DSN: postgresDSN},
 		Kafka: Kafka{
@@ -134,15 +154,24 @@ func Load() (Config, error) {
 			Password: os.Getenv("AGENTTRACE_REDIS_PASSWORD"),
 			DB:       redisDB,
 		},
-		WorkerURL:          envOr("AGENTTRACE_WORKER_URL", "http://worker:8100"),
-		ArtifactDir:        envOr("AGENTTRACE_ARTIFACT_DIR", "/artifacts"),
-		RuntimeConcurrency: runtimeConcurrency,
+		WorkerURL:               envOr("AGENTTRACE_WORKER_URL", "http://worker:8100"),
+		ArtifactDir:             envOr("AGENTTRACE_ARTIFACT_DIR", "/artifacts"),
+		BridgeToken:             strings.TrimSpace(os.Getenv("AGENTTRACE_BRIDGE_TOKEN")),
+		BridgeProjectID:         strings.TrimSpace(os.Getenv("AGENTTRACE_PROJECT_ID")),
+		BridgeConversationID:    strings.TrimSpace(os.Getenv("AGENTTRACE_CONVERSATION_ID")),
+		ManagementEnabled:       managementEnabled,
+		BrowserProviderToken:    strings.TrimSpace(os.Getenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN")),
+		BrowserAllowedDomains:   commaSeparated(os.Getenv("AGENTTRACE_BROWSER_ALLOWED_DOMAINS")),
+		RuntimeConcurrency:      runtimeConcurrency,
+		BuiltinHarnessDirectory: builtinDirectory,
+		BuiltinMCPCommand:       envOr("AGENTTRACE_BUILTIN_MCP_COMMAND", "node"),
+		BuiltinMCPEntry:         envOr("AGENTTRACE_BUILTIN_MCP_ENTRY", filepath.Join(filepath.Dir(builtinDirectory), "dist", "mcp", "server.js")),
 		Model: Model{
+			Provider:        provider,
 			BaseURL:         envOr("AGENTTRACE_MODEL_BASE_URL", "https://api.unself.cn/v1"),
 			Name:            envOr("AGENTTRACE_MODEL_NAME", "glm-5.3-flash"),
 			ReasoningEffort: envOr("AGENTTRACE_MODEL_REASONING_EFFORT", "high"),
 			APIKey:          os.Getenv("AGENTTRACE_MODEL_API_KEY"),
-			ScriptPath:      strings.TrimSpace(os.Getenv("AGENTTRACE_MODEL_SCRIPT")),
 		},
 		Harness: Harness{
 			Command:          envOr("AGENTTRACE_PI_HARNESS_COMMAND", "node"),
@@ -155,7 +184,15 @@ func Load() (Config, error) {
 			MaxLineBytes:     maxLineBytes,
 			MaxStderrBytes:   maxStderrBytes,
 		},
-	}, nil
+	}
+	hasBridge := cfg.BridgeToken != "" || cfg.BridgeProjectID != "" || cfg.BridgeConversationID != ""
+	if managementEnabled && cfg.BridgeToken == "" {
+		return Config{}, fmt.Errorf("AGENTTRACE_BRIDGE_TOKEN is required for management")
+	}
+	if !managementEnabled && hasBridge && (cfg.BridgeToken == "" || cfg.BridgeProjectID == "" || cfg.BridgeConversationID == "") {
+		return Config{}, fmt.Errorf("AGENTTRACE_BRIDGE_TOKEN, AGENTTRACE_PROJECT_ID and AGENTTRACE_CONVERSATION_ID must be configured together")
+	}
+	return cfg, nil
 }
 
 // LoadExporter validates no dependencies while the optional process is disabled.
@@ -202,8 +239,9 @@ func LoadExporter() (Exporter, error) {
 		"authorization,cookie,password,token,api_key,secret",
 	))
 	return Exporter{
-		Enabled:  true,
-		Postgres: Postgres{DSN: postgresDSN},
+		ExportProjectID: strings.TrimSpace(os.Getenv("AGENTTRACE_EXPORT_PROJECT_ID")),
+		Enabled:         true,
+		Postgres:        Postgres{DSN: postgresDSN},
 		Kafka: Kafka{
 			Brokers:    brokers,
 			EventTopic: "agenttrace.run.events.v1",

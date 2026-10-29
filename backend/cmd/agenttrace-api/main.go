@@ -6,23 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	v3 "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/api/v3"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/browserprovider"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/outbox"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/serviceprobe"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -53,12 +58,56 @@ func run() error {
 	if err := postgres.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("migrate PostgreSQL: %w", err)
 	}
+	store := postgres.NewStore(pool)
+	store.SetManagementEnabled(cfg.ManagementEnabled)
+	if cfg.ManagementEnabled {
+		stopAPIHeartbeat := store.StartServiceHeartbeat(ctx, "api", processID("api"), "")
+		defer stopAPIHeartbeat()
+	}
+	if err := store.SetEnvironmentDefaultPolicy(cfg.BrowserAllowedDomains); err != nil {
+		return fmt.Errorf("configure browser domain policy: %w", err)
+	}
+	mcpEntry, err := filepath.Abs(cfg.BuiltinMCPEntry)
+	if err != nil {
+		return errors.New("resolve builtin MCP entry failed")
+	}
+	builtin, err := execution.LoadBuiltinHarness(cfg.BuiltinHarnessDirectory, cfg.BuiltinMCPCommand, mcpEntry)
+	if err != nil {
+		return fmt.Errorf("load builtin Harness: %w", err)
+	}
+	if err := store.SeedBuiltinHarness(ctx, builtin); err != nil {
+		return fmt.Errorf("seed builtin Harness: %w", err)
+	}
 
 	bus, err := kafka.New(kafka.Config{Brokers: cfg.Kafka.Brokers})
 	if err != nil {
 		return fmt.Errorf("open Kafka: %w", err)
 	}
 	defer bus.Close()
+	var kafkaLag func(context.Context) serviceprobe.Measurement
+	if cfg.ManagementEnabled {
+		probe, probeErr := serviceprobe.NewKafkaLag(cfg.Kafka)
+		if probeErr == nil {
+			defer probe.Close()
+			kafkaLag = probe.Measure
+		}
+	}
+	var provider *browserprovider.Client
+	if cfg.ManagementEnabled {
+		provider, err = browserprovider.New(cfg.WorkerURL, cfg.BrowserProviderToken)
+		if err != nil {
+			return fmt.Errorf("configure browser provider: %w", err)
+		}
+		lifecycleCtx, cancelLifecycle := context.WithCancel(ctx)
+		lifecycleDone := make(chan struct{})
+		go func() {
+			defer close(lifecycleDone)
+			_ = browserprovider.ConsumeLifecycle(lifecycleCtx, bus, store, provider, func(err error) {
+				log.Printf("environment lifecycle: %v", err)
+			})
+		}()
+		defer func() { cancelLifecycle(); <-lifecycleDone }()
+	}
 
 	var (
 		redisClient *goredis.Client
@@ -70,6 +119,24 @@ func run() error {
 		})
 		defer redisClient.Close()
 		liveStore = liveredis.NewClient(redisClient)
+		notifier := &live.Notifier{
+			Store: liveStore,
+			OnError: func(err error) {
+				log.Printf("live notifier: %v", err)
+			},
+		}
+		notifierCtx, cancelNotifier := context.WithCancel(ctx)
+		notifierDone := make(chan struct{})
+		go func() {
+			defer close(notifierDone)
+			if err := notifier.Consume(notifierCtx, bus); err != nil && notifierCtx.Err() == nil {
+				log.Printf("live notifier stopped: %v", err)
+			}
+		}()
+		defer func() {
+			cancelNotifier()
+			<-notifierDone
+		}()
 	}
 	var redisHealth func(context.Context) error
 	if redisClient != nil {
@@ -82,7 +149,11 @@ func run() error {
 		return fmt.Errorf("load browser profile: %w", err)
 	}
 
-	relay := outbox.NewRelay(pool, bus, outbox.Config{WorkerID: processID("api-outbox")})
+	relayConfig := outbox.Config{WorkerID: processID("api-outbox")}
+	if cfg.ManagementEnabled {
+		relayConfig.Observe = store.NewServiceObserver("outbox_relay", relayConfig.WorkerID, "")
+	}
+	relay := outbox.NewRelay(pool, bus, relayConfig)
 	relayCtx, cancelRelay := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() {
@@ -94,23 +165,25 @@ func run() error {
 		<-relayDone
 	}()
 
-	store := postgres.NewStore(pool)
 	api := v3.New(v3.ServerConfig{
-		Repository:  store,
-		Profile:     profile,
-		Model:       configuredModel(cfg.Model, profile),
-		Stream:      stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
-		Live:        liveStore,
-		ArtifactDir: cfg.ArtifactDir,
+		Repository:           store,
+		Profile:              profile,
+		Model:                configuredModel(cfg.Model, profile),
+		Runtimes:             cfg.RuntimeCatalog(),
+		Stream:               stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
+		ArtifactDir:          cfg.ArtifactDir,
+		BridgeToken:          cfg.BridgeToken,
+		BridgeProjectID:      cfg.BridgeProjectID,
+		BridgeConversationID: cfg.BridgeConversationID,
+		ManagementEnabled:    cfg.ManagementEnabled,
+		BrowserProvider:      provider,
 		Health: v3.HealthDependencies{
 			Postgres: pool.Ping,
 			Kafka:    bus.Health,
+			KafkaLag: kafkaLag,
 			Redis:    redisHealth,
 			Worker:   workerHealthCheck(cfg.WorkerURL),
-			// Langfuse runs in an optional, asynchronous Compose profile. The
-			// API has no control-plane endpoint for that process, so a nil
-			// check reports it as disabled instead of inventing a probe.
-			Langfuse: nil,
+			Langfuse: langfuseHealthCheck(os.Getenv("AGENTTRACE_LANGFUSE_BASE_URL")),
 		},
 	})
 	server := &http.Server{
@@ -118,6 +191,7 @@ func run() error {
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.ListenAndServe() }()
@@ -139,10 +213,14 @@ func run() error {
 }
 
 func configuredModel(cfg config.Model, profile agentprofile.Profile) event.ModelRef {
-	if cfg.APIKey == "" {
-		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: profile.Model.ReasoningEffort}
+	reasoningEffort := cfg.ReasoningEffort
+	if reasoningEffort == "" {
+		reasoningEffort = profile.Model.ReasoningEffort
 	}
-	return event.ModelRef{Provider: profile.Model.Provider, Name: cfg.Name, ReasoningEffort: profile.Model.ReasoningEffort}
+	if cfg.Provider == "scripted" {
+		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: reasoningEffort}
+	}
+	return event.ModelRef{Provider: cfg.Provider, Name: cfg.Name, ReasoningEffort: reasoningEffort}
 }
 
 func relayLoop(ctx context.Context, relay *outbox.Relay) {
@@ -161,12 +239,23 @@ func relayLoop(ctx context.Context, relay *outbox.Relay) {
 }
 
 func workerHealthCheck(workerURL string) func(context.Context) error {
+	return endpointHealthCheck(workerURL, "/health")
+}
+
+func langfuseHealthCheck(baseURL string) func(context.Context) error {
+	if strings.TrimSpace(baseURL) == "" {
+		return nil
+	}
+	return endpointHealthCheck(baseURL, "/api/public/health")
+}
+
+func endpointHealthCheck(baseURL, path string) func(context.Context) error {
 	return func(ctx context.Context) error {
-		parsed, err := url.Parse(strings.TrimSpace(workerURL))
+		parsed, err := url.Parse(strings.TrimSpace(baseURL))
 		if err != nil {
 			return fmt.Errorf("parse worker URL: %w", err)
 		}
-		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/health"
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + path
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 		if err != nil {
 			return fmt.Errorf("build worker health request: %w", err)

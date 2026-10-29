@@ -88,8 +88,11 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 		return fmt.Errorf("create Langfuse client: %w", err)
 	}
 	store := postgres.NewStore(pool)
+	stopHeartbeat := store.StartServiceHeartbeat(ctx, "exporter", processID("exporter"), cfg.ExportProjectID)
+	defer stopHeartbeat()
 	exporter := &langfuse.Exporter{
-		Repository: store,
+		ExportProjectID: cfg.ExportProjectID,
+		Repository:      store,
 		Inbox: langfuse.PostgresInbox{
 			Deduplicator: consumer.NewDeduplicator(pool, consumerName),
 		},
@@ -104,7 +107,10 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 		MaxAttempts:  cfg.Langfuse.MaxAttempts,
 	}
 
-	relay := outbox.NewRelay(pool, bus, outbox.Config{WorkerID: processID("exporter-outbox")})
+	relay := outbox.NewRelay(pool, bus, outbox.Config{
+		WorkerID: processID("exporter-outbox"),
+		Observe:  store.NewServiceObserver("outbox_relay", processID("exporter-outbox"), cfg.ExportProjectID),
+	})
 	relayCtx, cancelRelay := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() {

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,8 +39,8 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatalf("count applied migrations: %v", err)
 	}
-	if applied != 7 {
-		t.Fatalf("applied migrations = %d, want 7", applied)
+	if want := expectedMigrationCount(t); applied != want {
+		t.Fatalf("applied migrations = %d, want %d", applied, want)
 	}
 
 	for _, unique := range []struct {
@@ -120,10 +121,25 @@ func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 			t.Fatalf("count applied migrations after attempt %d: %v", attempt, err)
 		}
-		if applied != 7 {
-			t.Fatalf("applied migrations after attempt %d = %d, want 7", attempt, applied)
+		if want := expectedMigrationCount(t); applied != want {
+			t.Fatalf("applied migrations after attempt %d = %d, want %d", attempt, applied, want)
 		}
 	}
+}
+
+func expectedMigrationCount(t *testing.T) int {
+	t.Helper()
+	entries, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 1 // 008 is deliberately embedded in Go.
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			count++
+		}
+	}
+	return count
 }
 
 func resetDatabase(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

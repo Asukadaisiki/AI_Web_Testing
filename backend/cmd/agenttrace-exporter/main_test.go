@@ -48,6 +48,19 @@ func TestEnabledConfigurationRunsCompositionAndReturnsItsError(t *testing.T) {
 	}
 }
 
+func TestEnabledConfigurationPreservesExportProjectScope(t *testing.T) {
+	err := runConfigured(context.Background(), config.Exporter{Enabled: true, ExportProjectID: "project_1"},
+		func(_ context.Context, cfg config.Exporter) error {
+			if cfg.ExportProjectID != "project_1" {
+				t.Fatal("export project scope lost before composition")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExporterConsumerNameUsesConfiguredKafkaGroupForDurableIdentity(t *testing.T) {
 	const group = "agenttrace-langfuse-exporter-failure-isolated"
 	name, err := exporterConsumerName(config.Exporter{

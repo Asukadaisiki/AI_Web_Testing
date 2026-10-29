@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,7 @@ func TestIngestionSerializerMatchesCanonicalJSONEncoding(t *testing.T) {
 				ID: "span-1", TraceID: "trace-1", ParentObservationID: "parent-1",
 				Name: "operation & result", Input: map[string]any{"count": float64(3)},
 				Output: map[string]any{"done": true}, Metadata: map[string]any{"kind": "operation"},
-				StartTime: start, EndTime: &end, Level: "DEFAULT", StatusMessage: "succeeded",
+				StartTime: &start, EndTime: &end, Level: "DEFAULT", StatusMessage: "succeeded",
 			},
 		},
 	}}
@@ -341,6 +342,206 @@ func TestHTTPClientReturnsTypedClassifiedStatusErrors(t *testing.T) {
 	}
 }
 
+func TestHTTPClientValidatesIngestionResults(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    int
+		body      string
+		wantError string
+		transient bool
+	}{
+		{name: "legacy empty 200", status: 200},
+		{name: "legacy object 200", status: 200, body: `{}`},
+		{name: "legacy whitespace object 200", status: 200, body: "{ \n }"},
+		{name: "all succeeded", status: 207, body: `{"successes":[{"id":"$id","status":201}],"errors":[]}`},
+		{name: "permanent event failure", status: 207, body: `{"successes":[],"errors":[{"id":"$id","status":400,"message":"invalid event","error":"schema mismatch"}]}`, wantError: "invalid event", transient: false},
+		{name: "rate limited event", status: 207, body: `{"successes":[],"errors":[{"id":"$id","status":429,"message":"rate limited"}]}`, wantError: "429", transient: true},
+		{name: "timeout event", status: 207, body: `{"successes":[],"errors":[{"id":"$id","status":408,"message":"timed out"}]}`, wantError: "408", transient: true},
+		{name: "provider event failure", status: 207, body: `{"successes":[],"errors":[{"id":"$id","status":503,"message":"unavailable"}]}`, wantError: "503", transient: true},
+		{name: "structured 200 failure", status: 200, body: `{"successes":[],"errors":[{"id":"$id","status":500,"message":"unavailable"}]}`, wantError: "500", transient: true},
+		{name: "empty 207", status: 207, wantError: "response", transient: true},
+		{name: "missing results", status: 207, body: `{}`, wantError: "response", transient: true},
+		{name: "null results", status: 207, body: `{"successes":null,"errors":null}`, wantError: "response", transient: true},
+		{name: "malformed", status: 207, body: `{"successes":`, wantError: "response", transient: true},
+		{name: "trailing JSON", status: 207, body: `{"successes":[{"id":"$id","status":201}],"errors":[]} {}`, wantError: "response", transient: true},
+		{name: "unacknowledged event", status: 207, body: `{"successes":[],"errors":[]}`, wantError: "acknowledg", transient: true},
+		{name: "unknown event", status: 207, body: `{"successes":[{"id":"unknown","status":201}],"errors":[]}`, wantError: "acknowledg", transient: true},
+		{name: "duplicate event", status: 207, body: `{"successes":[{"id":"$id","status":201},{"id":"$id","status":201}],"errors":[]}`, wantError: "acknowledg", transient: true},
+		{name: "non-success in successes", status: 207, body: `{"successes":[{"id":"$id","status":500}],"errors":[]}`, wantError: "response", transient: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var eventID string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request ingestionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					return
+				}
+				eventID = request.Batch[0].ID
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, strings.ReplaceAll(test.body, "$id", eventID))
+			}))
+			defer server.Close()
+
+			err := newHTTPTestClient(t, server.URL, server.Client()).Ingest(context.Background(), minimalBatch())
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("ingest: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want %q", err, test.wantError)
+			}
+			if IsTransient(err) != test.transient {
+				t.Fatalf("IsTransient(%v) = %v, want %v", err, IsTransient(err), test.transient)
+			}
+			if strings.Contains(test.body, `"message"`) && !strings.Contains(err.Error(), eventID) {
+				t.Fatalf("failure did not identify rejected event %q: %v", eventID, err)
+			}
+		})
+	}
+}
+
+func TestHTTPClientBoundsIngestionResponse(t *testing.T) {
+	const limit = 64 << 10
+	for _, extra := range []int{0, 1, 1 << 20} {
+		t.Run(strconv.Itoa(extra), func(t *testing.T) {
+			var body *countedResponseBody
+			client := newHTTPTestClient(t, "https://langfuse.example", &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					var request ingestionRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						return nil, err
+					}
+					result := fmt.Sprintf(`{"successes":[{"id":%q,"status":201}],"errors":[]}`, request.Batch[0].ID)
+					body = &countedResponseBody{Reader: strings.NewReader(result + strings.Repeat(" ", limit-len(result)+extra))}
+					return &http.Response{StatusCode: 207, Body: body}, nil
+				}),
+			})
+			err := client.Ingest(context.Background(), minimalBatch())
+			if extra == 0 && err != nil {
+				t.Fatalf("exact boundary rejected: %v", err)
+			}
+			if extra > 0 && (err == nil || !strings.Contains(err.Error(), "maximum") || !IsTransient(err)) {
+				t.Fatalf("oversize response error = %v, want retryable maximum-size error", err)
+			}
+			if body.read > limit+1 {
+				t.Fatalf("response bytes read = %d, want at most %d", body.read, limit+1)
+			}
+			if !body.closed {
+				t.Fatal("response body not closed")
+			}
+		})
+	}
+}
+
+func TestHTTPClientPartialFailureUsesExporterRetryAndDLQ(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    int
+		recover   bool
+		wantCalls int
+		wantDLQ   int
+	}{
+		{name: "retry then success", status: 503, recover: true, wantCalls: 2},
+		{name: "retry exhaustion", status: 503, wantCalls: 2, wantDLQ: 1},
+		{name: "permanent failure", status: 400, wantCalls: 1, wantDLQ: 1},
+		{name: "mixed failures retry", status: 429, wantCalls: 2, wantDLQ: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests [][]byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read request: %v", err)
+					return
+				}
+				requests = append(requests, raw)
+				var request ingestionRequest
+				if err := json.Unmarshal(raw, &request); err != nil {
+					t.Errorf("decode request: %v", err)
+					return
+				}
+				successes := make([]map[string]any, 0)
+				failures := make([]map[string]any, 0)
+				for index, item := range request.Batch {
+					if (test.recover && len(requests) > 1) || index == 0 {
+						successes = append(successes, map[string]any{"id": item.ID, "status": 201})
+					} else {
+						status := test.status
+						if test.status == 429 && index == 1 {
+							status = 400
+						}
+						failures = append(failures, map[string]any{"id": item.ID, "status": status, "message": "event rejected"})
+					}
+				}
+				w.WriteHeader(http.StatusMultiStatus)
+				_ = json.NewEncoder(w).Encode(map[string]any{"successes": successes, "errors": failures})
+			}))
+			defer server.Close()
+			exporter := newTestExporter(canonicalRepository(), newHTTPTestClient(t, server.URL, server.Client()))
+			exporter.MaxAttempts = 2
+			inbox := exporter.Inbox.(*memoryInbox)
+			retries := exporter.RetryStore.(*memoryRetryStore)
+			const eventID = "evt-partial"
+			message := completionMessage(t, eventID)
+
+			err := exporter.Handle(context.Background(), message)
+			if test.status != 400 && err == nil {
+				t.Fatal("partial success was acknowledged instead of retried")
+			}
+			if test.status == 400 && err != nil {
+				t.Fatalf("permanent failure DLQ: %v", err)
+			}
+			if inbox.seen[eventID] {
+				t.Fatal("partial success committed the inbox")
+			}
+			if test.status != 400 && (retries.attempts[eventID] != 1 || retries.handoffCount != 0) {
+				t.Fatalf("partial failure retry state = %#v", retries)
+			}
+			if err := exporter.Handle(context.Background(), message); err != nil {
+				t.Fatalf("second delivery: %v", err)
+			}
+			if err := exporter.Handle(context.Background(), message); err != nil {
+				t.Fatalf("replay: %v", err)
+			}
+			if len(requests) != test.wantCalls || retries.handoffCount != test.wantDLQ {
+				t.Fatalf("deliveries = %d, DLQ = %d; want %d, %d", len(requests), retries.handoffCount, test.wantCalls, test.wantDLQ)
+			}
+			if inbox.seen[eventID] != test.recover {
+				t.Fatalf("inbox committed = %v, want %v", inbox.seen[eventID], test.recover)
+			}
+			if len(requests) == 2 && !bytes.Equal(requests[0], requests[1]) {
+				t.Fatal("partial-failure retry changed ingestion payload or deterministic IDs")
+			}
+			if test.wantDLQ == 1 {
+				handoff := retries.handoffs[eventID]
+				if handoff.Topic != DLQTopic || handoff.EventID != retries.DLQEventID(eventID) {
+					t.Fatalf("unexpected DLQ handoff: %#v", handoff)
+				}
+			}
+		})
+	}
+}
+
+type countedResponseBody struct {
+	io.Reader
+	read   int
+	closed bool
+}
+
+func (b *countedResponseBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	b.read += n
+	return n, err
+}
+
+func (b *countedResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestHTTPClientReturnsAfterEarlyResponseWithoutConsumingBody(t *testing.T) {
 	for _, status := range []int{http.StatusAccepted, http.StatusBadRequest} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -348,7 +549,7 @@ func TestHTTPClientReturnsAfterEarlyResponseWithoutConsumingBody(t *testing.T) {
 				Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 					return &http.Response{
 						StatusCode: status,
-						Body:       io.NopCloser(strings.NewReader("response")),
+						Body:       io.NopCloser(strings.NewReader("")),
 					}, nil
 				}),
 			})
@@ -385,7 +586,7 @@ func TestHTTPClientCancelsWhenEarlyResponseLeavesWriterBlocked(t *testing.T) {
 			<-request.Context().Done()
 			return &http.Response{
 				StatusCode: http.StatusAccepted,
-				Body:       io.NopCloser(strings.NewReader("response")),
+				Body:       io.NopCloser(strings.NewReader("")),
 			}, nil
 		}),
 	})
