@@ -25,8 +25,17 @@ func servicesTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store) {
 	if err != nil {
 		t.Fatal("invalid services test DSN")
 	}
-	if cfg.ConnConfig.Database != "agenttrace_test_services_20261028" {
-		t.Fatal("services tests require exactly agenttrace_test_services_20261028")
+	name, err := repositoryTestDatabaseName(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"AGENTTRACE_TEST_POSTGRES_DSN", "AGENTTRACE_LEASE_TEST_POSTGRES_DSN", "AGENTTRACE_MANAGEMENT_TEST_POSTGRES_DSN", "AGENTTRACE_CONTROL_TEST_POSTGRES_DSN", "AGENTTRACE_SEED_TEST_POSTGRES_DSN"} {
+		if other := os.Getenv(key); other != "" {
+			otherName, _ := repositoryTestDatabaseName(other)
+			if name == otherName {
+				t.Fatalf("services tests require a database independent of %s", key)
+			}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -44,7 +53,7 @@ func servicesTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store) {
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
-	store.SetManagementEnabled(true)
+
 	return ctx, pool, store
 }
 

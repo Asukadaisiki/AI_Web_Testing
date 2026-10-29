@@ -56,7 +56,7 @@ it("rejects an unknown runtime without selecting another adapter", async () => {
   await expect(factory(request, {
     eventWriter: new HarnessEventWriter({ run_id: "r", attempt_id: "a" }, { write: () => true }),
     signal: new AbortController().signal,
-  })).rejects.toThrow("unsupported runtime");
+  })).rejects.toThrow("execution specification");
   expect(adapters.claude).not.toHaveBeenCalled();
   expect(adapters.codex).not.toHaveBeenCalled();
 });

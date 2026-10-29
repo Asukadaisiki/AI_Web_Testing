@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,14 +19,11 @@ export interface HarnessResources {
 export async function prepareHarnessResources(
   request: RunRequest, options: McpResolutionOptions = {},
 ): Promise<HarnessResources> {
-  const rawExecution = (request as RunRequest & { execution?: unknown }).execution;
-  const execution = rawExecution === undefined ? undefined : parseExecutionSpec(rawExecution);
-  const snapshot = execution?.harness;
-  const hasBrowser = !snapshot || Object.values(snapshot.mcp).some((server) => server.capability === "browser-harness");
+  const execution = parseExecutionSpec(request.execution);
+  const snapshot = execution.harness;
+  const hasBrowser = Object.values(snapshot.mcp).some((server) => server.capability === "browser-harness");
   const browser = hasBrowser ? (await import("./browser-harness.js")).createBrowserHarnessDefinition() : undefined;
-  const servers = snapshot ? await resolveMcpCapabilities(snapshot.mcp, request, options, browser) : [
-    ...(typeof browser!.mcpServers === "function" ? browser!.mcpServers(request) : browser!.mcpServers),
-  ];
+  const servers = await resolveMcpCapabilities(snapshot.mcp, request, options, browser);
   const repository = await realpath(fileURLToPath(new URL("../../", import.meta.url)));
   const preferredTemp = await realpath(tmpdir());
   const outside = (path: string): boolean => {
@@ -44,20 +41,16 @@ export async function prepareHarnessResources(
   try {
     const skillRoot = join(cwd, "skills");
     await mkdir(skillRoot, { mode: 0o700 });
-    if (snapshot) {
-      for (const skill of snapshot.skills) {
-        await privateFile(join(skillRoot, skill.name, "SKILL.md"), skill.content);
-        for (const file of skill.files ?? []) {
-          await privateFile(join(skillRoot, skill.name, file.path), file.content);
-        }
+    for (const skill of snapshot.skills) {
+      await privateFile(join(skillRoot, skill.name, "SKILL.md"), skill.content);
+      for (const file of skill.files ?? []) {
+        await privateFile(join(skillRoot, skill.name, file.path), file.content);
       }
-    } else {
-      for (const source of browser!.skillPaths) await copySkills(source, skillRoot);
     }
     const skillPaths = [skillRoot];
-    const systemPrompt = snapshot?.system_prompt ?? browser!.systemPrompt;
+    const systemPrompt = snapshot.system_prompt;
     const browserServer = servers.find((server) => normalizeName(server.name) === "browser_harness");
-    const definition: HarnessDefinition = snapshot ? {
+    const definition: HarnessDefinition = {
       systemPrompt, skillPaths, mcpServers: servers,
       toolAllowlist: servers.map((server) => `mcp__${normalizeName(server.name)}__*`),
       completionPolicy: browserServer ? browser!.completionPolicy : ({ assistant_settled, aborted }) => ({
@@ -76,7 +69,7 @@ export async function prepareHarnessResources(
         createEventMapper: browser!.createEventMapper!,
         cleanup: browser!.cleanup!,
       } : {}),
-    } : { ...browser!, systemPrompt, skillPaths, mcpServers: servers };
+    };
     return { cwd, systemPrompt, skillPaths, servers, definition, dispose };
   } catch (error) {
     await dispose();
@@ -90,18 +83,4 @@ export const normalizeName = normalizeMcpName;
 async function privateFile(path: string, content: string | Uint8Array): Promise<void> {
   await mkdir(resolve(path, ".."), { recursive: true, mode: 0o700 });
   await writeFile(path, content, { flag: "wx", mode: 0o600 });
-}
-
-async function copySkills(source: string, destination: string): Promise<void> {
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    const target = join(destination, entry.name);
-    if (entry.isDirectory()) {
-      await mkdir(target, { mode: 0o700 });
-      await copySkills(join(source, entry.name), target);
-    } else if (entry.isFile()) {
-      await privateFile(target, await readFile(join(source, entry.name)));
-    } else {
-      throw new Error("unsupported harness skill resource path");
-    }
-  }
 }

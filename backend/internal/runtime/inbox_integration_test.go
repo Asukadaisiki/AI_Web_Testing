@@ -12,6 +12,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -295,11 +296,21 @@ func TestRuntimeInboxAbandonedClaimReconcilesAttemptWithoutAnotherSession(t *tes
 		}
 		t.Run(name, func(t *testing.T) {
 			ctx, pool, store := newRuntimePostgresStore(t)
-			command := seedInboxRun(t, ctx, pool)
-			traceStore := PostgresPiTraceStore{Store: store}
+			command := seedInboxRun(t, ctx, store)
+			traceStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 			if afterAttempt {
-				if _, err := traceStore.StartRun(ctx, command); err != nil {
+				ref, err := traceStore.StartRun(ctx, command)
+				if err != nil {
 					t.Fatalf("abandoned attempt: %v", err)
+				}
+				if err := traceStore.MarkRunStarted(ctx, ref); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `UPDATE environment_leases SET expires_at=clock_timestamp()-interval '1 minute'`); err != nil {
+					t.Fatal(err)
+				}
+				if n, err := store.RecoverExpiredHarnessLeases(ctx, 10); n != 1 || err != nil {
+					t.Fatalf("recover abandoned started attempt: %d %v", n, err)
 				}
 			}
 			message := commandMessage(t, "evt-abandoned-inbox", command)
@@ -354,21 +365,24 @@ func TestRuntimeInboxAbandonedClaimReconcilesAttemptWithoutAnotherSession(t *tes
 	}
 }
 
-func seedInboxRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool) event.RunCommand {
+func seedInboxRun(t *testing.T, ctx context.Context, store *postgres.Store) event.RunCommand {
 	t.Helper()
-	for _, sql := range []string{
-		`INSERT INTO projects (id, name) VALUES ('prj-inbox', 'inbox fixture')`,
-		`INSERT INTO conversations (id, project_id) VALUES ('conv-inbox', 'prj-inbox')`,
-		`INSERT INTO runs (id, project_id, conversation_id, status, specification)
-		 VALUES ('run-inbox', 'prj-inbox', 'conv-inbox', 'queued', '{}'::jsonb)`,
-	} {
-		if _, err := pool.Exec(ctx, sql); err != nil {
-			t.Fatal(err)
-		}
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "inbox fixture"}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	command := commandFor("run-inbox")
-	command.ConversationID = "conv-inbox"
-	return command
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{ProjectID: project.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
+		ConversationID: conversation.ID, Content: "perform once", IdempotencyKey: t.Name(),
+		Model: event.ModelRef{Provider: "scripted", Name: "fixture"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return managedFixtureCommand(t, ctx, PostgresPiTraceStore{Store: store}, commandFor(run.ID))
 }
 
 type inboxRunnerFunc func(context.Context, event.RunCommand) error
@@ -381,4 +395,8 @@ type inboxHarnessFunc func(context.Context, piharness.Request, func(piharness.Ev
 
 func (f inboxHarnessFunc) Run(ctx context.Context, request piharness.Request, emit func(piharness.Event)) error {
 	return f(ctx, request, emit)
+}
+
+func (f inboxHarnessFunc) RunWithRelease(ctx context.Context, request piharness.Request, emit func(piharness.Event)) (bool, error) {
+	return true, f(ctx, request, emit)
 }

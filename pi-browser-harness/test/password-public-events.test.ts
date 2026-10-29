@@ -1,11 +1,13 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { Writable } from "node:stream";
 import { expect, it } from "vitest";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { createBrowserSession } from "../src/pi-session.js";
+import { createSelectedBrowserSession } from "./fixtures/selected-harness.js";
 import { HarnessEventWriter, type HarnessEvent, type RunRequest } from "../src/run-protocol.js";
 
 const secret = "public-password-canary";
 const request: RunRequest = {
+  execution: browserExecution, ...environmentLease,
   protocol_version: "pi-browser-harness.v1", run_id: "password-review", attempt_id: "password-review-attempt",
   goal: `Log in with ${secret}`,
   model: { provider: "scripted", name: "browser-fixture", reasoning_effort: "high" },
@@ -21,7 +23,7 @@ async function fixture() {
     privateContext = context;
     return {} as never;
   };
-  const session = await createBrowserSession(request, {
+  const session = await createSelectedBrowserSession(request, {
     modelRuntime: runtime, eventWriter: new HarnessEventWriter(request, new Writable({
       write(chunk, _encoding, done) { events.push(JSON.parse(String(chunk))); done(); },
     })),

@@ -1,3 +1,4 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
@@ -7,8 +8,10 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { expect, it, vi } from "vitest";
-import { createBrowserSession, type BrowserSession } from "../src/pi-session.js";
+import type { PiSession } from "../src/pi-session.js";
+import { createSelectedBrowserSession } from "./fixtures/selected-harness.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
+import { SessionCleanupError } from "../src/server.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -35,7 +38,7 @@ it.each([200, 500])("Pi session close awaits the real MCP child's DELETE acknowl
       reply.end("{}");
     }
   });
-  let session: BrowserSession | undefined;
+  let session: PiSession | undefined;
   let sdk: AgentSession | undefined;
   let closing: Promise<unknown> | undefined;
   let prompt: Promise<void> | undefined;
@@ -50,11 +53,12 @@ it.each([200, 500])("Pi session close awaits the real MCP child's DELETE acknowl
     const address = worker.address();
     if (!address || typeof address === "string") throw new Error("worker did not listen");
     const request: RunRequest = {
+  execution: browserExecution, ...environmentLease,
       protocol_version: "pi-browser-harness.v1", run_id: "cleanup", attempt_id: "cleanup-attempt",
       goal: "open example", model: { provider: "scripted", name: "fixture", reasoning_effort: "off" },
       worker_url: `http://127.0.0.1:${address.port}`, artifact_scope: "cleanup",
     };
-    session = await createBrowserSession(request, {
+    session = await createSelectedBrowserSession(request, {
       cwd: built, mcpChildPath: join(built, "mcp/server.js"),
       modelRuntime: await ModelRuntime.create({ refreshOnCreate: false }),
       eventWriter: new HarnessEventWriter(request, new Writable({
@@ -80,6 +84,11 @@ it.each([200, 500])("Pi session close awaits the real MCP child's DELETE acknowl
         sdk = result.session;
         return result;
       },
+    }, {
+      ...(status === 500 ? {
+        expectedCleanupFailure: (error: unknown) => error instanceof SessionCleanupError &&
+          error.message === "worker_error: cleanup uncertain",
+      } : {}),
     });
     await sdk!.prompt("/mcp");
     const result = await sdk!.getToolDefinition("mcp__browser_harness__open_page")!.execute(
@@ -121,8 +130,8 @@ it.each([200, 500])("Pi session close awaits the real MCP child's DELETE acknowl
       ? { closed: true } : { error: "worker_error", detail: "cleanup uncertain" }));
     const outcome = await closing;
     if (status === 500) {
-      expect(outcome).toBeInstanceOf(Error);
-      expect((outcome as Error).message).toContain("cleanup uncertain");
+      expect(outcome).toBeInstanceOf(SessionCleanupError);
+      expect((outcome as Error).message).toBe("worker_error: cleanup uncertain");
       await expect(session.close()).rejects.toThrow("cleanup uncertain");
     } else {
       expect(outcome).toBe("released");

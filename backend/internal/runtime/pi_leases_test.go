@@ -74,7 +74,7 @@ func TestPiRunnerUsesAssignmentMetadataAndExplicitReleaseAck(t *testing.T) {
 			p := &releaseAwareProcess{ack: ack, fakeHarnessProcess: fakeHarnessProcess{events: passingEventStream("managed", "provider")}}
 			command := commandFor("managed")
 			command.WorkerURL = "http://untrusted-snapshot:8100"
-			err := (PiRunner{Store: s, Process: p, WorkerURL: "http://static:8100"}).Run(context.Background(), command)
+			err := (PiRunner{Store: s, Process: p}).Run(context.Background(), command)
 			if p.request.WorkerURL != s.ref.WorkerURL || p.request.EnvironmentID != "env" || p.request.ProjectID != "p" ||
 				p.request.ProfileGeneration != 3 || p.request.FencingToken != 8 || !s.marked {
 				t.Fatalf("assignment not honored: %#v marked=%v err=%v", p.request, s.marked, err)

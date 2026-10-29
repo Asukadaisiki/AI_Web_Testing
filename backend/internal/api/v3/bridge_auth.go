@@ -38,27 +38,17 @@ func BridgeIdentityFromContext(ctx context.Context) (BridgeIdentity, bool) {
 	return identity, ok
 }
 
-// bridgeGuard is the sole entry point in bridge mode, including unmatched
-// routes and artifacts. It never dispatches the unrestricted mux before scope
-// and ownership checks.
-// Parent integration passes ServerConfig.ManagementEnabled as the optional
-// flag. Omitting it retains the fixed-Conversation first-loop allowlist.
-func (s *Server) bridgeGuard(next http.Handler, config ServerConfig, managementEnabled ...bool) http.Handler {
+// bridgeGuard authenticates and scopes every route, including artifacts.
+func (s *Server) bridgeGuard(next http.Handler, config ServerConfig) http.Handler {
 	token := strings.TrimSpace(config.BridgeToken)
 	projectID := strings.TrimSpace(config.BridgeProjectID)
-	conversationID := strings.TrimSpace(config.BridgeConversationID)
-	dynamic := len(managementEnabled) > 0 && managementEnabled[0]
-	complete := token != "" && projectID != "" && conversationID != ""
-	if dynamic {
-		complete = token != ""
-	}
 	expected := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/health" && r.URL.RawPath == "" {
 			s.handleHealth(w, r)
 			return
 		}
-		if !complete {
+		if token == "" {
 			writeError(w, http.StatusServiceUnavailable, "bridge_unavailable", "bridge configuration is incomplete")
 			return
 		}
@@ -71,24 +61,21 @@ func (s *Server) bridgeGuard(next http.Handler, config ServerConfig, managementE
 			writeError(w, http.StatusUnauthorized, "unauthorized", "service authentication is required")
 			return
 		}
-		kind, id, allowed := bridgeRoute(r, dynamic)
+		kind, id, allowed := bridgeRoute(r)
 		if !allowed {
 			writeBridgeForbidden(w)
 			return
 		}
-		requestProjectID := projectID
-		if dynamic {
-			identity, ok := s.requireDynamicBridgeIdentity(w, r, projectID)
-			if !ok {
-				return
-			}
-			if !managementRoleAllows(r, identity.Role) {
-				writeBridgeForbidden(w)
-				return
-			}
-			requestProjectID = identity.ProjectID
-			r = r.WithContext(context.WithValue(r.Context(), bridgeIdentityKey{}, identity))
+		identity, ok := s.requireDynamicBridgeIdentity(w, r, projectID)
+		if !ok {
+			return
 		}
+		if !managementRoleAllows(r, identity.Role) {
+			writeBridgeForbidden(w)
+			return
+		}
+		requestProjectID := identity.ProjectID
+		r = r.WithContext(context.WithValue(r.Context(), bridgeIdentityKey{}, identity))
 		switch kind {
 		case "project":
 			if id != requestProjectID {
@@ -96,10 +83,6 @@ func (s *Server) bridgeGuard(next http.Handler, config ServerConfig, managementE
 				return
 			}
 		case "conversation":
-			if !dynamic && id != conversationID {
-				writeBridgeForbidden(w)
-				return
-			}
 			if !s.requireRepository(w) {
 				return
 			}
@@ -113,11 +96,7 @@ func (s *Server) bridgeGuard(next http.Handler, config ServerConfig, managementE
 				return
 			}
 		case "run", "artifact":
-			scopedConversationID := conversationID
-			if dynamic {
-				scopedConversationID = ""
-			}
-			if !s.bridgeOwnsRun(w, r, id, requestProjectID, scopedConversationID) {
+			if !s.bridgeOwnsRun(w, r, id, requestProjectID) {
 				return
 			}
 			if kind == "artifact" {
@@ -152,52 +131,14 @@ func (s *Server) bridgeGuard(next http.Handler, config ServerConfig, managementE
 }
 
 // Explicit method/path matching also rejects mux cleaning redirects, so no
-// alternate path or future native route can bypass the first-loop allowlist.
-func bridgeRoute(r *http.Request, dynamic ...bool) (kind, id string, allowed bool) {
+// alternate path or future route can bypass the management allowlist.
+func bridgeRoute(r *http.Request) (kind, id string, allowed bool) {
 	if r.URL.Path != path.Clean(r.URL.Path) || strings.Contains(r.URL.Path, `\`) ||
 		strings.Contains(strings.ToLower(r.URL.EscapedPath()), "%2f") {
 		return "", "", false
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(dynamic) > 0 && dynamic[0] {
-		return managementBridgeRoute(r.Method, parts)
-	}
-	method := r.Method
-	if len(parts) >= 3 && parts[0] == "artifacts" && (method == http.MethodGet || method == http.MethodHead) {
-		return "artifact", parts[1], true
-	}
-	if len(parts) < 3 || parts[0] != "api" || parts[1] != "v1" {
-		return "", "", false
-	}
-	switch parts[2] {
-	case "health", "runtimes":
-		return "", "", len(parts) == 3 && method == http.MethodGet
-	case "harnesses":
-		if len(parts) == 3 {
-			return "", "", method == http.MethodGet || method == http.MethodPost
-		}
-		return "", "", len(parts) == 4 && (method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete)
-	case "conversations":
-		if len(parts) == 4 && method == http.MethodGet {
-			return "conversation", parts[3], true
-		}
-		if len(parts) == 5 && parts[4] == "messages" && method == http.MethodPost {
-			return "conversation", parts[3], true
-		}
-	case "runs":
-		if len(parts) == 4 && method == http.MethodGet {
-			return "run", parts[3], true
-		}
-		if len(parts) == 5 {
-			switch parts[4] {
-			case "trace", "events":
-				return "run", parts[3], method == http.MethodGet
-			case "cancel", "reruns":
-				return "run", parts[3], method == http.MethodPost
-			}
-		}
-	}
-	return "", "", false
+	return managementBridgeRoute(r.Method, parts)
 }
 
 func (s *Server) requireDynamicBridgeIdentity(w http.ResponseWriter, r *http.Request, configuredProject string) (BridgeIdentity, bool) {
@@ -314,7 +255,7 @@ func managementBridgeRoute(method string, parts []string) (kind, id string, allo
 			switch parts[4] {
 			case "trace", "events":
 				return "run", parts[3], method == "GET"
-			case "cancel", "reruns", "responses":
+			case "cancel", "reruns":
 				return "run", parts[3], method == "POST"
 			}
 		}
@@ -382,7 +323,7 @@ func writeBridgeForbidden(w http.ResponseWriter) {
 	writeError(w, http.StatusForbidden, "bridge_forbidden", "request is outside the configured bridge scope")
 }
 
-func (s *Server) bridgeOwnsRun(w http.ResponseWriter, r *http.Request, id, projectID, conversationID string) bool {
+func (s *Server) bridgeOwnsRun(w http.ResponseWriter, r *http.Request, id, projectID string) bool {
 	if !s.requireRepository(w) {
 		return false
 	}
@@ -391,21 +332,18 @@ func (s *Server) bridgeOwnsRun(w http.ResponseWriter, r *http.Request, id, proje
 		writeRepositoryError(w, err)
 		return false
 	}
-	if run.ID != id || run.ProjectID != projectID || run.ConversationID == "" ||
-		(conversationID != "" && run.ConversationID != conversationID) {
+	if run.ID != id || run.ProjectID != projectID || run.ConversationID == "" {
 		writeBridgeForbidden(w)
 		return false
 	}
-	if conversationID == "" {
-		conversation, _, _, err := s.repository.GetConversation(r.Context(), run.ConversationID)
-		if err != nil {
-			writeRepositoryError(w, err)
-			return false
-		}
-		if conversation.ID != run.ConversationID || conversation.ProjectID != projectID {
-			writeBridgeForbidden(w)
-			return false
-		}
+	conversation, _, _, err := s.repository.GetConversation(r.Context(), run.ConversationID)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return false
+	}
+	if conversation.ID != run.ConversationID || conversation.ProjectID != projectID {
+		writeBridgeForbidden(w)
+		return false
 	}
 	return true
 }

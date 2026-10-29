@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createBrowserHarnessDefinition } from "../src/browser-harness.js";
 import { parseRunRequest } from "../src/run-protocol.js";
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 
 const generic = {
+  execution: browserExecution, ...environmentLease,
   protocol_version: "pi-browser-harness.v1", run_id: "run", attempt_id: "attempt",
   goal: "answer", model: { provider: "scripted", name: "fixture", reasoning_effort: "off" },
 };

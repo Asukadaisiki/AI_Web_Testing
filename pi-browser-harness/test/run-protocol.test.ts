@@ -9,8 +9,10 @@ import {
 } from "../src/run-protocol.js";
 import { deriveTerminalVerdict, validateBrowserEventPayload } from "../src/browser-protocol.js";
 import type { Case, ExecutionResult } from "../src/browser/contract.js";
+import { genericExecution } from "./fixtures/selected-harness.js";
 
 const request = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1",
   run_id: "run_1",
   attempt_id: "attempt_1",

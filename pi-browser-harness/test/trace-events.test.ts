@@ -64,6 +64,13 @@ function toolEnd(
   } as unknown as AgentSessionEvent;
 }
 
+function browserMcpResult(tool: string, structuredContent: unknown) {
+  return {
+    content: [], details: { server: "browser-harness", tool },
+    structuredContent: { content: [], structuredContent },
+  };
+}
+
 const settled: AgentSessionEvent = {
   type: "agent_settled",
   aborted: false,
@@ -217,9 +224,7 @@ describe("mapPiEvent", () => {
     const state = createTraceMapperState();
     const page = { url: "https://a.test", title: "A", elements: [] };
     const events = mapPiEvent(
-      toolEnd("call_1", "mcp__browser_harness__open_page", {
-        structuredContent: { ok: true, page },
-      }),
+      toolEnd("call_1", "mcp__browser_harness__open_page", browserMcpResult("open_page", { ok: true, page })),
       state,
     );
 
@@ -310,11 +315,11 @@ describe("mapPiEvent", () => {
       expect(
         events.find((event) => event.type === "browser.observation")?.payload,
         testCase.name,
-      ).toEqual({ tool_call_id: "call_1", observation: directPage });
+      ).toBeUndefined();
     }
   });
 
-  it("preserves an ambiguous direct result with domain structuredContent", () => {
+  it("rejects ambiguous direct result data as browser evidence", () => {
     const state = createTraceMapperState();
     const page = { url: "https://direct.test", title: "Direct", elements: [] };
     const events = mapPiEvent(
@@ -328,14 +333,7 @@ describe("mapPiEvent", () => {
       state,
     );
 
-    expect(events.map((event) => event.type)).toEqual([
-      "pi.tool.completed",
-      "browser.observation",
-    ]);
-    expect(events[1]?.payload).toEqual({
-      tool_call_id: "call_1",
-      observation: page,
-    });
+    expect(events.map((event) => event.type)).toEqual(["pi.tool.completed"]);
   });
 
   it("derives objective finish evidence from finish_case structured content", () => {
@@ -343,13 +341,11 @@ describe("mapPiEvent", () => {
     const caseArtifact = completeCase;
     const dryRun = completeDryRun("passed");
     const events = mapPiEvent(
-      toolEnd("call_2", "mcp__browser_harness__finish_case", {
-        structuredContent: {
+      toolEnd("call_2", "mcp__browser_harness__finish_case", browserMcpResult("finish_case", {
           ok: true,
           case: caseArtifact,
           dry_run: dryRun,
-        },
-      }),
+        })),
       state,
     );
 
@@ -400,13 +396,11 @@ describe("mapPiEvent", () => {
   it("ignores passing finish evidence from any other tool", () => {
     const state = createTraceMapperState();
     const events = mapPiEvent(
-      toolEnd("call_2", "mcp__browser_harness__click", {
-        structuredContent: {
+      toolEnd("call_2", "mcp__browser_harness__click", browserMcpResult("click", {
           ok: true,
           case: { case_version: "loop.case.v1", steps: [] },
           dry_run: { status: "passed", execution_id: "exec_wrong_tool" },
-        },
-      }),
+        })),
       state,
     );
 
@@ -455,13 +449,11 @@ describe("mapPiEvent", () => {
     ({ caseValue, dryRunValue }) => {
       const state = createTraceMapperState();
       const events = mapPiEvent(
-        toolEnd("call_2", "mcp__browser_harness__finish_case", {
-          structuredContent: {
+        toolEnd("call_2", "mcp__browser_harness__finish_case", browserMcpResult("finish_case", {
             ok: true,
             case: caseValue,
             dry_run: dryRunValue,
-          },
-        }),
+          })),
         state,
       );
 
@@ -475,13 +467,11 @@ describe("mapPiEvent", () => {
   it("records a failed dry run as a failed browser case verdict", () => {
     const state = createTraceMapperState();
     mapPiEvent(
-      toolEnd("call_2", "mcp__browser_harness__finish_case", {
-        structuredContent: {
+      toolEnd("call_2", "mcp__browser_harness__finish_case", browserMcpResult("finish_case", {
           ok: false,
           case: completeCase,
           dry_run: completeDryRun("failed"),
-        },
-      }),
+        })),
       state,
     );
 

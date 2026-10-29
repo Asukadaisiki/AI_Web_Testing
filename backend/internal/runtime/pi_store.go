@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
@@ -78,28 +80,41 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 	if strings.TrimSpace(command.RunID) == "" {
 		return HarnessAttemptRef{}, errors.New("pi run command run id is required")
 	}
-	providerAttemptID := newProviderAttemptID(command.RunID)
-	var attempt postgres.HarnessAttempt
-	var fence postgres.HarnessFence
-	var assignedURL string
-	var err error
-	if s.Store.ManagementEnabled() {
-		runtimeID := ""
-		if command.Execution != nil {
-			runtimeID = command.Execution.RuntimeID
-		}
-		claim, claimErr := s.Store.ClaimHarnessLease(ctx, postgres.LeaseClaim{
-			RunID: command.RunID, ProjectID: command.ProjectID, EnvironmentID: command.EnvironmentID,
-			ProfileGeneration: command.ProfileGeneration, RuntimeWorkerID: s.RuntimeWorkerID,
-			ProviderAttemptID: providerAttemptID, RuntimeID: runtimeID, TTL: s.LeaseTTL,
-		})
-		attempt, fence, assignedURL, err = claim.Attempt, claim.Fence, claim.WorkerURL, claimErr
-	} else {
-		attempt, err = s.Store.BeginHarnessAttempt(ctx, command.RunID, providerAttemptID)
-	}
+	run, err := s.Store.GetRun(ctx, command.RunID)
 	if err != nil {
 		return HarnessAttemptRef{}, err
 	}
+	switch run.Status {
+	case domain.RunSucceeded, domain.RunFailed, domain.RunCancelled:
+		return HarnessAttemptRef{}, postgres.ErrRunAlreadyTerminal
+	}
+	if err := command.ValidateManagedExecution(); err != nil {
+		return HarnessAttemptRef{}, err
+	}
+	var persisted struct {
+		Command   event.RunCommand `json:"command"`
+		Execution *execution.Spec  `json:"execution"`
+	}
+	if err := json.Unmarshal(run.Specification, &persisted); err != nil {
+		return HarnessAttemptRef{}, errors.New("invalid persisted managed command")
+	}
+	if err := persisted.Command.ValidateManagedExecution(); err != nil {
+		return HarnessAttemptRef{}, err
+	}
+	if !reflect.DeepEqual(persisted.Command, command) || !reflect.DeepEqual(persisted.Execution, command.Execution) ||
+		run.ProjectID != command.ProjectID || run.ConversationID != command.ConversationID {
+		return HarnessAttemptRef{}, postgres.ErrConflict
+	}
+	providerAttemptID := newProviderAttemptID(command.RunID)
+	claim, err := s.Store.ClaimHarnessLease(ctx, postgres.LeaseClaim{
+		RunID: command.RunID, ProjectID: command.ProjectID, EnvironmentID: command.EnvironmentID,
+		ProfileGeneration: command.ProfileGeneration, RuntimeWorkerID: s.RuntimeWorkerID,
+		ProviderAttemptID: providerAttemptID, RuntimeID: command.Execution.RuntimeID, TTL: s.LeaseTTL,
+	})
+	if err != nil {
+		return HarnessAttemptRef{}, err
+	}
+	attempt, fence := claim.Attempt, claim.Fence
 	ref := HarnessAttemptRef{
 		ID:                attempt.ID,
 		RunID:             attempt.RunID,
@@ -107,7 +122,7 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 		ProviderAttemptID: attempt.ProviderAttemptID,
 		CancelRequested:   attempt.CancelRequested,
 		Fence:             fence,
-		WorkerURL:         assignedURL,
+		WorkerURL:         claim.WorkerURL,
 	}
 	now := time.Now().UTC()
 	rootSpan := domain.Span{
@@ -120,7 +135,7 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 		Status:    "running",
 		StartedAt: now,
 	}
-	// StartTraceAttempt's child span must carry status "started" for validation,
+	// The initialized child span must carry status "started" for validation,
 	// but the root span is inserted first (via Root) with status "running" and
 	// the duplicate insert is a no-op, so the persisted root keeps "running".
 	startedSpan := rootSpan
@@ -136,11 +151,7 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 			StartedAt:     now,
 		},
 	}
-	if s.Store.ManagementEnabled() {
-		err = s.Store.InitializeHarnessTrace(ctx, fence, started)
-	} else {
-		err = s.Store.StartTraceAttempt(ctx, started)
-	}
+	err = s.Store.InitializeHarnessTrace(ctx, fence, started)
 	if err != nil {
 		return HarnessAttemptRef{}, fmt.Errorf("create pi root span: %w", err)
 	}

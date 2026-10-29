@@ -1,3 +1,4 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { Writable } from "node:stream";
@@ -16,7 +17,8 @@ import {
   BROWSER_TOOL_SCHEMAS,
   type BrowserToolName,
 } from "../src/mcp/schemas.js";
-import { createBrowserSession, createPiSession } from "../src/pi-session.js";
+import { createPiSession } from "../src/pi-session.js";
+import { createSelectedBrowserSession } from "./fixtures/selected-harness.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
 import { SessionCleanupError } from "../src/server.js";
 
@@ -25,13 +27,14 @@ const TYPESCRIPT_COMPILER_PATH = fileURLToPath(
   new URL("../node_modules/typescript/bin/tsc", import.meta.url),
 );
 const BUILT_PI_SESSION_PATH = fileURLToPath(
-  new URL("../dist/pi-session.js", import.meta.url),
+  new URL("../dist/session-factory.js", import.meta.url),
 );
 const BUILT_MCP_CHILD_PATH = fileURLToPath(
   new URL("../dist/mcp/server.js", import.meta.url),
 );
 
 const baseRequest: RunRequest = {
+  execution: browserExecution, ...environmentLease,
   protocol_version: "pi-browser-harness.v1",
   run_id: "run_1",
   attempt_id: "attempt_1",
@@ -65,6 +68,7 @@ interface FakeSession {
   getActiveToolNames: ReturnType<typeof vi.fn>;
   getToolDefinition: ReturnType<typeof vi.fn>;
   extensionRunner: {
+    emit: ReturnType<typeof vi.fn>;
     createToolContext: ReturnType<typeof vi.fn>;
     getToolDefinition: ReturnType<typeof vi.fn>;
   };
@@ -82,6 +86,7 @@ function makeFakeSession(activeTools: string[] = []): FakeSession {
       async execute() { return { structuredContent: { structuredContent: { closed: true } } }; },
     })),
     extensionRunner: {
+      emit: vi.fn().mockResolvedValue(undefined),
       createToolContext: vi.fn(() => ({})),
       getToolDefinition: vi.fn(() => ({
         async execute() { return { structuredContent: { structuredContent: { closed: true } } }; },
@@ -98,7 +103,7 @@ async function createDefaultResourceLoader(
   const { writer } = makeWriter();
   let loader: ResourceLoader | undefined;
 
-  await createBrowserSession(baseRequest, {
+  await createSelectedBrowserSession(baseRequest, {
     createAgentSession: async (options) => {
       loader = options.resourceLoader;
       return { session: fake as never, extensionsResult: {} as never };
@@ -134,7 +139,7 @@ async function createSessionWithRequest(
   const { writer } = makeWriter();
   let captured: CreateAgentSessionOptions | undefined;
 
-  await createBrowserSession(request, {
+  await createSelectedBrowserSession(request, {
     createAgentSession: async (options) => {
       captured = options;
       return { session: fake as never, extensionsResult: {} as never };
@@ -197,14 +202,14 @@ function expectMcpToolArguments(
   expect(z.object(schema!.inputSchema).safeParse(arguments_).success).toBe(true);
 }
 
-describe("createBrowserSession", () => {
+describe("createSelectedBrowserSession", () => {
   it.each(["model-context-password-canary", "input", "value", "passed"])("sanitizes known password %s tool arguments before model invocation and event capture", async (secret) => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const provider = vi.fn(() => ({} as never));
     runtime.streamSimple = provider;
     const fake = makeFakeSession();
     const { writer, chunks } = makeWriter();
-    const session = await createBrowserSession(baseRequest, {
+    const session = await createSelectedBrowserSession(baseRequest, {
       modelRuntime: runtime, eventWriter: writer,
       createAgentSession: async () => ({
         session: { ...fake, extensionRunner: { ...fake.extensionRunner, async emit() {} } } as never,
@@ -275,7 +280,7 @@ describe("createBrowserSession", () => {
     const fake = makeFakeSession();
     const { writer } = makeWriter();
     fake.bindExtensions.mockRejectedValue(new Error("bind failed"));
-    await expect(createBrowserSession(baseRequest, {
+    await expect(createSelectedBrowserSession(baseRequest, {
       modelRuntime: runtime, eventWriter: writer,
       createAgentSession: async () => ({
         session: {
@@ -284,6 +289,9 @@ describe("createBrowserSession", () => {
         } as never,
         extensionsResult: {} as never,
       }),
+    }, {
+      expectedCleanupFailure: (error) => error instanceof SessionCleanupError &&
+        error.message === "shutdown failed",
     })).rejects.toBeInstanceOf(SessionCleanupError);
     expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
@@ -322,7 +330,7 @@ describe("createBrowserSession", () => {
       },
     };
     fake.dispose.mockImplementation(() => order.push("dispose"));
-    const creating = createBrowserSession(baseRequest, {
+    const creating = createSelectedBrowserSession(baseRequest, {
       modelRuntime: runtime, eventWriter: writer,
       createAgentSession: async () => ({ session: withShutdown as never, extensionsResult: {} as never }),
     });
@@ -344,17 +352,20 @@ describe("createBrowserSession", () => {
     fake.bindExtensions.mockImplementation(async () => { order.push("bind"); await binding; });
     fake.abort.mockImplementation(async () => { order.push("abort"); finishBinding(); });
     fake.dispose.mockImplementation(() => { order.push("dispose"); });
-    const creating = createBrowserSession(baseRequest, {
+    const creating = createSelectedBrowserSession(baseRequest, {
       modelRuntime: runtime, eventWriter: writer, signal: controller.signal,
       createAgentSession: async () => ({
-        session: { ...fake, extensionRunner: { async emit() { order.push("shutdown"); } } } as never,
+        session: {
+          ...fake,
+          extensionRunner: { ...fake.extensionRunner, async emit() { order.push("shutdown"); } },
+        } as never,
         extensionsResult: {} as never,
       }),
     });
     void creating.catch(() => {});
     await vi.waitFor(() => expect(order).toEqual(["bind"]));
     controller.abort();
-    await expect(creating).rejects.toThrow();
+    await expect(creating).rejects.toMatchObject({ name: "AbortError" });
     expect(order).toEqual(["bind", "abort", "shutdown", "dispose"]);
   });
   it("reloads the selected resource loader before creating the agent session", async () => {
@@ -369,7 +380,7 @@ describe("createBrowserSession", () => {
       },
     } as ResourceLoader;
 
-    await createBrowserSession(baseRequest, {
+    await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async () => {
         order.push("createAgentSession");
         return { session: fake as never, extensionsResult: {} as never };
@@ -402,34 +413,36 @@ describe("createBrowserSession", () => {
 
     const compiledModule = (await import(
       `${pathToFileURL(BUILT_PI_SESSION_PATH).href}?test=${Date.now()}`
-    )) as typeof import("../src/pi-session.js");
-    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    )) as typeof import("../src/session-factory.js");
     const fake = makeFakeSession();
     const { writer } = makeWriter();
     let registeredChildArg: string | undefined;
 
-    await compiledModule.createBrowserSession(baseRequest, {
+    const factory = await compiledModule.createExecutionSessionFactory({
       createAgentSession: async (options) => {
         registeredChildArg = browserHarnessMcpChildPath(
           options.resourceLoader as ResourceLoader,
         );
         return { session: fake as never, extensionsResult: {} as never };
       },
-      modelRuntime: runtime,
+    });
+    const session = await factory(baseRequest, {
       eventWriter: writer,
+      signal: new AbortController().signal,
     });
 
     expect(registeredChildArg).toBe(BUILT_MCP_CHILD_PATH);
     expect(existsSync(BUILT_MCP_CHILD_PATH)).toBe(true);
+    await session.close();
   }, 30_000);
 
-  it("forces the checked-in system prompt and an empty append override", async () => {
+  it("forces the selected snapshot system prompt and an empty append override", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();
     let captured: CreateAgentSessionOptions | undefined;
     const { writer } = makeWriter();
 
-    await createBrowserSession(baseRequest, {
+    await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async (options) => {
         captured = options;
         return { session: fake as never, extensionsResult: {} as never };
@@ -441,19 +454,17 @@ describe("createBrowserSession", () => {
     const loader = captured!.resourceLoader as ResourceLoader;
     await loader.reload();
 
-    expect(loader.getSystemPrompt()).toContain(
-      "Author exactly one executable browser case",
-    );
+    expect(loader.getSystemPrompt()).toBe(browserExecution.harness.system_prompt);
     expect(loader.getAppendSystemPrompt()).toEqual([]);
   });
 
-  it("loads only the checked-in browser-case-authoring skill", async () => {
+  it("loads only the selected snapshot skill", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();
     let captured: CreateAgentSessionOptions | undefined;
     const { writer } = makeWriter();
 
-    await createBrowserSession(baseRequest, {
+    await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async (options) => {
         captured = options;
         return { session: fake as never, extensionsResult: {} as never };
@@ -466,7 +477,7 @@ describe("createBrowserSession", () => {
     await loader.reload();
 
     const { skills } = loader.getSkills();
-    expect(skills.map((s) => s.name)).toEqual(["browser-case-authoring"]);
+    expect(skills.map((s) => s.name)).toEqual(["selected-browser"]);
   });
 
   it("uses in-memory session and settings managers", async () => {
@@ -475,7 +486,7 @@ describe("createBrowserSession", () => {
     let captured: CreateAgentSessionOptions | undefined;
     const { writer } = makeWriter();
 
-    await createBrowserSession(baseRequest, {
+    await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async (options) => {
         captured = options;
         return { session: fake as never, extensionsResult: {} as never };
@@ -494,7 +505,7 @@ describe("createBrowserSession", () => {
     const fake = makeFakeSession(["mcp__browser_harness__open_page"]);
     const { writer } = makeWriter();
 
-    const session = await createBrowserSession(baseRequest, {
+    const session = await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async () => ({
         session: fake as never,
         extensionsResult: {} as never,
@@ -507,7 +518,7 @@ describe("createBrowserSession", () => {
     expect(active.every((name) => name.startsWith("mcp__browser_harness__"))).toBe(true);
   });
 
-  it("binds extensions before the first prompt and sends the skill command", async () => {
+  it("binds extensions before sending the selected skill content and goal", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();
     const order: string[] = [];
@@ -519,7 +530,7 @@ describe("createBrowserSession", () => {
     });
     const { writer } = makeWriter();
 
-    const session = await createBrowserSession(baseRequest, {
+    const session = await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async () => ({
         session: fake as never,
         extensionsResult: {} as never,
@@ -532,16 +543,16 @@ describe("createBrowserSession", () => {
 
     expect(order).toEqual([
       "bindExtensions",
-      "prompt:/skill:browser-case-authoring verify the cart",
+      `prompt:Selected Harness skill: selected-browser\n${browserExecution.harness.skills[0]!.content}\n\nGoal:\nverify the cart`,
     ]);
   });
 
-  it("dispose() releases the session", async () => {
+  it("awaited idempotent close releases the session without exposing synchronous dispose", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();
     const { writer } = makeWriter();
 
-    const session = await createBrowserSession(baseRequest, {
+    const session = await createSelectedBrowserSession(baseRequest, {
       createAgentSession: async () => ({
         session: fake as never,
         extensionsResult: {} as never,
@@ -550,7 +561,10 @@ describe("createBrowserSession", () => {
       eventWriter: writer,
     });
 
-    session.dispose();
+    expect(session).not.toHaveProperty("dispose");
+    const closing = session.close();
+    expect(session.close()).toBe(closing);
+    await closing;
 
     expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
@@ -801,7 +815,7 @@ describe("registerOpenAiCompatibleProvider", () => {
     const fake = makeFakeSession();
     const { writer } = makeWriter();
 
-    await createBrowserSession(makeOpenAiRequest(), {
+    await createSelectedBrowserSession(makeOpenAiRequest(), {
       createAgentSession: async () => ({
         session: fake as never,
         extensionsResult: {} as never,
@@ -824,7 +838,7 @@ describe("registerOpenAiCompatibleProvider", () => {
     const fake = makeFakeSession();
     const { writer } = makeWriter();
 
-    await createBrowserSession(makeOpenAiRequest(), {
+    await createSelectedBrowserSession(makeOpenAiRequest(), {
       createAgentSession: async () => ({
         session: fake as never,
         extensionsResult: {} as never,

@@ -3,7 +3,6 @@
 // 镜像位置（改这里必须同步改）：
 //   - CONTRACT.md
 //   - worker/loop_worker/contracts.py
-//   - web/src/api.ts
 //
 // v3 模型提供完整 case JSON；本包负责结构校验与默认值归一化。
 // 校验失败一律返回带稳定错误码的 *Violation。

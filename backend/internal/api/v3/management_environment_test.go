@@ -71,7 +71,7 @@ func dynamicManagementHandler(repository Repository, next http.Handler) http.Han
 		mux.HandleFunc("DELETE /api/v1/conversations/{id}", server.handleDeleteConversation)
 		next = mux
 	}
-	return server.bridgeGuard(next, ServerConfig{BridgeToken: testBridgeToken}, true)
+	return server.bridgeGuard(next, ServerConfig{BridgeToken: testBridgeToken})
 }
 
 func managementRequest(handler http.Handler, method, path, body, role string) *httptest.ResponseRecorder {
@@ -234,8 +234,8 @@ func TestManagementBridgeIgnoresLegacyConversationPin(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	server := &Server{repository: repository}
 	handler := server.bridgeGuard(next, ServerConfig{
-		BridgeToken: testBridgeToken, BridgeProjectID: "project_1", BridgeConversationID: "legacy_conversation",
-	}, true)
+		BridgeToken: testBridgeToken, BridgeProjectID: "project_1",
+	})
 	for _, path := range []string{"/api/v1/conversations/conv_1", "/api/v1/runs/run_1", "/api/v1/projects/project_1/conversations"} {
 		if got := managementRequest(handler, "GET", path, "", "member"); got.Code != 204 {
 			t.Fatalf("legacy pin restricted management: %s status=%d body=%s", path, got.Code, got.Body)

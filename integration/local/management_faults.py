@@ -20,7 +20,7 @@ import time
 import urllib.parse
 import uuid
 
-from acceptance import pg_environment
+from support import pg_environment
 from management import CheckFailure, Management, PNG, ROOT, TERMINAL, load_environment, record_id, require, sanitize
 
 

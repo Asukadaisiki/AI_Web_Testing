@@ -5,31 +5,25 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	HTTPAddr                string
-	Postgres                Postgres
-	Kafka                   Kafka
-	Redis                   Redis
-	WorkerURL               string
-	ArtifactDir             string
-	BridgeToken             string
-	BridgeProjectID         string
-	BridgeConversationID    string
-	ManagementEnabled       bool
-	BrowserProviderToken    string
-	BrowserAllowedDomains   []string
-	RuntimeConcurrency      int
-	Model                   Model
-	Harness                 Harness
-	BuiltinHarnessDirectory string
-	BuiltinMCPCommand       string
-	BuiltinMCPEntry         string
+	HTTPAddr              string
+	Postgres              Postgres
+	Kafka                 Kafka
+	Redis                 Redis
+	WorkerURL             string
+	ArtifactDir           string
+	BridgeToken           string
+	BridgeProjectID       string
+	BrowserProviderToken  string
+	BrowserAllowedDomains []string
+	RuntimeConcurrency    int
+	Model                 Model
+	Harness               Harness
 }
 
 // Harness configures the pi-browser-harness subprocess that runs browser
@@ -111,11 +105,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	managementEnabled, err := boolEnv("AGENTTRACE_MANAGEMENT_ENABLED", false)
-	if err != nil {
-		return Config{}, err
-	}
-
 	redisAddr := strings.TrimSpace(os.Getenv("AGENTTRACE_REDIS_ADDR"))
 	harnessTimeout, err := durationEnv("AGENTTRACE_PI_HARNESS_TIMEOUT", 20*time.Minute)
 	if err != nil {
@@ -137,7 +126,6 @@ func Load() (Config, error) {
 	if provider != "openai-compatible" && provider != "scripted" {
 		return Config{}, fmt.Errorf("AGENTTRACE_MODEL_PROVIDER must be openai-compatible or scripted")
 	}
-	builtinDirectory := envOr("AGENTTRACE_BUILTIN_HARNESS_DIR", "../pi-browser-harness/resources")
 	cfg := Config{
 		HTTPAddr: envOr("AGENTTRACE_HTTP_ADDR", ":8080"),
 		Postgres: Postgres{DSN: postgresDSN},
@@ -154,18 +142,13 @@ func Load() (Config, error) {
 			Password: os.Getenv("AGENTTRACE_REDIS_PASSWORD"),
 			DB:       redisDB,
 		},
-		WorkerURL:               envOr("AGENTTRACE_WORKER_URL", "http://worker:8100"),
-		ArtifactDir:             envOr("AGENTTRACE_ARTIFACT_DIR", "/artifacts"),
-		BridgeToken:             strings.TrimSpace(os.Getenv("AGENTTRACE_BRIDGE_TOKEN")),
-		BridgeProjectID:         strings.TrimSpace(os.Getenv("AGENTTRACE_PROJECT_ID")),
-		BridgeConversationID:    strings.TrimSpace(os.Getenv("AGENTTRACE_CONVERSATION_ID")),
-		ManagementEnabled:       managementEnabled,
-		BrowserProviderToken:    strings.TrimSpace(os.Getenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN")),
-		BrowserAllowedDomains:   commaSeparated(os.Getenv("AGENTTRACE_BROWSER_ALLOWED_DOMAINS")),
-		RuntimeConcurrency:      runtimeConcurrency,
-		BuiltinHarnessDirectory: builtinDirectory,
-		BuiltinMCPCommand:       envOr("AGENTTRACE_BUILTIN_MCP_COMMAND", "node"),
-		BuiltinMCPEntry:         envOr("AGENTTRACE_BUILTIN_MCP_ENTRY", filepath.Join(filepath.Dir(builtinDirectory), "dist", "mcp", "server.js")),
+		WorkerURL:             envOr("AGENTTRACE_WORKER_URL", "http://worker:8100"),
+		ArtifactDir:           envOr("AGENTTRACE_ARTIFACT_DIR", "/artifacts"),
+		BridgeToken:           strings.TrimSpace(os.Getenv("AGENTTRACE_BRIDGE_TOKEN")),
+		BridgeProjectID:       strings.TrimSpace(os.Getenv("AGENTTRACE_PROJECT_ID")),
+		BrowserProviderToken:  strings.TrimSpace(os.Getenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN")),
+		BrowserAllowedDomains: commaSeparated(os.Getenv("AGENTTRACE_BROWSER_ALLOWED_DOMAINS")),
+		RuntimeConcurrency:    runtimeConcurrency,
 		Model: Model{
 			Provider:        provider,
 			BaseURL:         envOr("AGENTTRACE_MODEL_BASE_URL", "https://api.unself.cn/v1"),
@@ -185,12 +168,11 @@ func Load() (Config, error) {
 			MaxStderrBytes:   maxStderrBytes,
 		},
 	}
-	hasBridge := cfg.BridgeToken != "" || cfg.BridgeProjectID != "" || cfg.BridgeConversationID != ""
-	if managementEnabled && cfg.BridgeToken == "" {
+	if cfg.BridgeToken == "" {
 		return Config{}, fmt.Errorf("AGENTTRACE_BRIDGE_TOKEN is required for management")
 	}
-	if !managementEnabled && hasBridge && (cfg.BridgeToken == "" || cfg.BridgeProjectID == "" || cfg.BridgeConversationID == "") {
-		return Config{}, fmt.Errorf("AGENTTRACE_BRIDGE_TOKEN, AGENTTRACE_PROJECT_ID and AGENTTRACE_CONVERSATION_ID must be configured together")
+	if cfg.BrowserProviderToken == "" {
+		return Config{}, fmt.Errorf("AGENTTRACE_BROWSER_PROVIDER_TOKEN is required for management")
 	}
 	return cfg, nil
 }

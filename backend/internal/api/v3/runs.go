@@ -12,12 +12,6 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/traceprojection"
 )
 
-type responseRequest struct {
-	Kind           string `json:"kind"`
-	Content        string `json:"content"`
-	IdempotencyKey string `json:"idempotency_key"`
-}
-
 type rerunRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
@@ -455,72 +449,4 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "cancelling"})
-}
-
-func (s *Server) handleResponse(w http.ResponseWriter, r *http.Request) {
-	if !s.requireRepository(w) {
-		return
-	}
-	var input responseRequest
-	if !decodeRequest(w, r, &input) {
-		return
-	}
-	for field, value := range map[string]string{
-		"kind": input.Kind, "content": input.Content, "idempotency_key": input.IdempotencyKey,
-	} {
-		if err := requiredText(value, field); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
-	}
-	if input.Kind != "question" && input.Kind != "approval" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "kind must be question or approval")
-		return
-	}
-	runID := r.PathValue("id")
-	if err := s.repository.SubmitResponse(r.Context(), postgres.SubmitResponseParams{
-		RunID:          runID,
-		Kind:           input.Kind,
-		Content:        input.Content,
-		IdempotencyKey: input.IdempotencyKey,
-		Continuation:   true,
-	}); err != nil {
-		writeRepositoryError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "queued"})
-}
-
-func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
-	type publicModel struct {
-		Provider        string `json:"provider"`
-		Name            string `json:"name"`
-		ReasoningEffort string `json:"reasoning_effort"`
-	}
-	type publicAgent struct {
-		ID          string      `json:"id"`
-		ProductName string      `json:"product_name"`
-		Model       publicModel `json:"model"`
-		Safety      any         `json:"safety"`
-	}
-	agents := []publicAgent{{
-		ID:          s.profile.ID,
-		ProductName: s.profile.ProductName,
-		Model: publicModel{
-			Provider: s.model.Provider, Name: s.model.Name,
-			ReasoningEffort: s.profile.Model.ReasoningEffort,
-		},
-		Safety: s.profile.Safety,
-	}}
-	for _, runtime := range s.runtimes {
-		if runtime.ID == s.profile.ID {
-			continue
-		}
-		agents = append(agents, publicAgent{
-			ID: runtime.ID, ProductName: runtime.Name,
-			Model:  publicModel{Provider: runtime.Model.Provider, Name: runtime.Model.Name, ReasoningEffort: runtime.Model.ReasoningEffort},
-			Safety: s.profile.Safety,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 }

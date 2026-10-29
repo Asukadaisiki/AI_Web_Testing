@@ -1,6 +1,8 @@
+import { browserExecution, environmentLease, workerOptions } from "./fixtures/selected-harness.js";
+import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, ModelRuntime, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
-import { createBrowserHarnessDefinition } from "../src/browser-harness.js";
+import { prepareHarnessResources, type HarnessResources } from "../src/harness-resources.js";
 import { validateBrowserEventPayload } from "../src/browser-protocol.js";
 import { createPiSession, type PiSession } from "../src/pi-session.js";
 import { HarnessEventWriter, type HarnessEvent, type RunRequest } from "../src/run-protocol.js";
@@ -41,7 +43,7 @@ async function stop(child: ChildProcess): Promise<void> {
 it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
   "real Pi/MCP/Chromium keeps password authoring and dry-run evidence private",
   async () => {
-    const root = await mkdtemp(join(tmpdir(), "password-worker-"));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "password-worker-")));
     const canary = "real-chromium-password-canary-7429";
     const witnessed: string[] = [];
     const publicOutputs: unknown[] = [];
@@ -49,6 +51,7 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
     const events: HarnessEvent[] = [];
     let worker: ChildProcess | undefined;
     let session: PiSession | undefined;
+    let resources: HarnessResources | undefined;
     let sdk: AgentSession | undefined;
     let workerLog = "";
     const fixture = createServer((req, res) => {
@@ -80,7 +83,13 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
       // Spawn only this test's worker. Never reconfigure or stop the live parent stack.
       worker = spawn(join(workerRoot, ".venv/bin/python"), [
         "-m", "uvicorn", "loop_worker.main:app", "--host", "127.0.0.1", "--port", String(port),
-      ], { cwd: workerRoot, env: { ...process.env, LOOP_ARTIFACTS_DIR: join(root, "artifacts") },
+      ], { cwd: workerRoot, env: { ...process.env,
+        LOOP_ARTIFACTS_DIR: join(root, "artifacts"),
+        LOOP_ENVIRONMENTS_DIR: join(root, "profiles"),
+        LOOP_UPLOADS_DIR: join(root, "uploads"),
+        LOOP_ENVIRONMENT_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
+        LOOP_WORKER_INTERNAL_TOKEN: workerOptions.providerToken,
+      },
         stdio: ["ignore", "pipe", "pipe"] });
       worker.stdout!.on("data", (chunk) => { workerLog += chunk; });
       worker.stderr!.on("data", (chunk) => { workerLog += chunk; });
@@ -92,7 +101,18 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       expect(healthy, workerLog).toBe(true);
+      const provision = await fetch(`${workerUrl}/environments/${environmentLease.environment_id}/provision`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${workerOptions.providerToken}`,
+          "x-project-id": environmentLease.project_id, "content-type": "application/json" },
+        body: JSON.stringify({
+          project_id: environmentLease.project_id, profile_generation: environmentLease.profile_generation,
+          fencing_token: 1, policy: { allowed_domains: ["127.0.0.1"] },
+        }),
+      });
+      expect(provision.status, await provision.text()).toBe(200);
       const request: RunRequest = {
+        execution: browserExecution, ...environmentLease,
         protocol_version: "pi-browser-harness.v1", run_id: "password-evidence",
         attempt_id: "password-evidence-attempt", goal: `Verify private password entry using ${canary}`,
         model: { provider: "scripted", name: "password-fixture", reasoning_effort: "off" },
@@ -121,8 +141,10 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
           value: canary, expect_value: canary, intent: "enter password" } },
         { name: "finish_case", arguments: { name: "private password case" } },
       ];
+      resources = await prepareHarnessResources(request);
+      resources.servers[0]!.args = [childPath];
       session = await createPiSession(request, {
-        cwd: root, modelRuntime: runtime,
+        cwd: resources.cwd, modelRuntime: runtime,
         eventWriter: new HarnessEventWriter(request, new Writable({
           write(chunk, _encoding, done) { events.push(JSON.parse(chunk.toString())); done(); },
         })),
@@ -138,7 +160,7 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
           return result;
         },
       }, {
-        ...createBrowserHarnessDefinition(childPath), skillPaths: [], formatPrompt: (goal) => goal,
+        ...resources.definition,
         scriptedResponse: (_goal, prior) => tools[prior] ? {
           tool: { name: `mcp__browser_harness__${tools[prior]!.name}`,
             arguments: tools[prior]!.arguments as never },
@@ -171,6 +193,7 @@ it.skipIf(process.env.RUN_PASSWORD_WORKER_TEST !== "1")(
       try { await session?.close(); } finally {
         try { if (worker) await stop(worker); } finally {
           await closeServer(fixture);
+          await resources?.dispose();
           await rm(root, { recursive: true, force: true });
         }
       }

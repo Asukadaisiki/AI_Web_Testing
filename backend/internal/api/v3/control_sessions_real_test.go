@@ -107,11 +107,11 @@ func TestControlGatewayRealChromiumProfilePersistenceAndReset(t *testing.T) {
 		Kind: "provision", ProfileGeneration: f.env.ProfileGeneration, FencingToken: f.env.FencingToken, Policy: f.env.Policy}); err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{repository: f.store, browserProvider: f.provider, management: true}
+	server := &Server{repository: f.store, browserProvider: f.provider}
 	mux := http.NewServeMux()
 	server.registerControlSessionRoutes(mux)
 	server.registerEnvironmentRoutes(mux)
-	f.handler = server.bridgeGuard(mux, ServerConfig{BridgeToken: testBridgeToken}, true)
+	f.handler = server.bridgeGuard(mux, ServerConfig{BridgeToken: testBridgeToken})
 	checks := make(chan string, 10)
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("real browser site request: %s %s", r.Method, r.URL.Path)

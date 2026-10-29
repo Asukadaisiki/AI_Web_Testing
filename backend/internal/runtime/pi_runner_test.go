@@ -46,8 +46,8 @@ func TestBuildHarnessRequestDefaultsBlankArtifactScopeToRunID(t *testing.T) {
 	if request.Model.Provider != "openai" || request.Model.Name != "gpt-5" || request.Model.ReasoningEffort != "high" {
 		t.Fatalf("model = %#v, want command model fields", request.Model)
 	}
-	if request.WorkerURL != "http://command-worker:8100" {
-		t.Fatalf("worker URL = %q, want command fallback", request.WorkerURL)
+	if request.WorkerURL != "" {
+		t.Fatalf("worker URL = %q, command cannot select a browser endpoint", request.WorkerURL)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestBuildHarnessRequestPreservesExplicitArtifactScope(t *testing.T) {
 	}
 }
 
-func TestPiRunnerDefaultsLegacyBlankReasoningEffortFromConfiguredProfile(t *testing.T) {
+func TestPiRunnerDefaultsBlankReasoningEffortFromConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		value string
@@ -475,7 +475,7 @@ func TestPiRunnerPostgresCompletionFailureRedeliveryDoesNotReplay(t *testing.T) 
 	}{{"transient_concurrent_duplicate", 1}, {"restart_reconciliation", 3}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, pool, store := newRuntimePostgresStore(t)
-			project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "reconciliation"})
+			project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "reconciliation"}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -483,15 +483,15 @@ func TestPiRunnerPostgresCompletionFailureRedeliveryDoesNotReplay(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
-				ConversationID: conversation.ID, Content: "perform once", AgentID: "browser-eval",
+			_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
+				ConversationID: conversation.ID, Content: "perform once",
 				Model: event.ModelRef{Provider: "pi", Name: "test"}, IdempotencyKey: t.Name(),
-			})
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			piStore := PostgresPiTraceStore{Store: store}
-			faults := &completionFaultStore{PiTraceStore: piStore, failures: tc.failures}
+			piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
+			faults := &completionFaultStore{PostgresPiTraceStore: piStore, failures: tc.failures}
 			process := &fakeHarnessProcess{events: []piharness.Event{
 				harEvent(piharness.EventSettled, run.ID, "", 1,
 					`{"verdict":"succeeded","assistant_text":"performed once"}`),
@@ -504,6 +504,7 @@ func TestPiRunnerPostgresCompletionFailureRedeliveryDoesNotReplay(t *testing.T) 
 			}
 			command := commandFor(run.ID)
 			command.ConversationID = conversation.ID
+			command = managedFixtureCommand(t, ctx, piStore, command)
 			message := commandMessage(t, "evt-reconciliation", command)
 			var firstErr error
 			if tc.failures == 1 {
@@ -537,12 +538,20 @@ func TestPiRunnerPostgresCompletionFailureRedeliveryDoesNotReplay(t *testing.T) 
 				}
 			} else {
 				firstErr = consumer.Handle(ctx, message)
+				// A lost started attempt cannot be replayed; expiry recovery
+				// terminalizes it and retains the uncertain browser lease.
+				if _, err := pool.Exec(ctx, `UPDATE environment_leases SET expires_at=clock_timestamp()-interval '1 minute'`); err != nil {
+					t.Fatal(err)
+				}
+				if n, err := store.RecoverExpiredHarnessLeases(ctx, 10); n != 1 || err != nil {
+					t.Fatalf("recover started attempt: %d %v", n, err)
+				}
 			}
 			if (firstErr != nil) != (tc.failures == 3) {
 				t.Fatalf("first delivery = %v, failures = %d", firstErr, tc.failures)
 			}
 			// A fresh runner/store simulates loss of all in-process outcome state.
-			consumer.Runner = PiRunner{Store: PostgresPiTraceStore{Store: postgres.NewStore(pool)}, Process: execution}
+			consumer.Runner = PiRunner{Store: PostgresPiTraceStore{Store: postgres.NewStore(pool), RuntimeWorkerID: "runtime"}, Process: execution}
 			for range 2 {
 				if err := consumer.Handle(ctx, message); err != nil {
 					t.Fatalf("restart redelivery: %v", err)
@@ -573,7 +582,7 @@ func TestPiRunnerPostgresCompletionFailureRedeliveryDoesNotReplay(t *testing.T) 
 }
 
 type completionFaultStore struct {
-	PiTraceStore
+	PostgresPiTraceStore
 	failures int
 }
 
@@ -582,7 +591,7 @@ func (s *completionFaultStore) CompleteHarnessRun(ctx context.Context, ref Harne
 		s.failures--
 		return "", errors.New("terminal write unavailable")
 	}
-	return s.PiTraceStore.CompleteHarnessRun(ctx, ref, outcome)
+	return s.PostgresPiTraceStore.CompleteHarnessRun(ctx, ref, outcome)
 }
 
 type identityHarnessProcess struct {
@@ -774,6 +783,7 @@ func (f *blockingHarnessProcess) Run(ctx context.Context, _ piharness.Request, _
 type fakePiStore struct {
 	mu                    sync.Mutex
 	ref                   HarnessAttemptRef
+	unleased              bool
 	startErr              error
 	events                []piharness.Event
 	outcome               PiRunOutcome
@@ -786,11 +796,42 @@ type fakePiStore struct {
 	cancellationRequested bool
 }
 
-func (f *fakePiStore) StartRun(_ context.Context, _ event.RunCommand) (HarnessAttemptRef, error) {
+func (f *fakePiStore) StartRun(_ context.Context, command event.RunCommand) (HarnessAttemptRef, error) {
 	if f.startErr != nil {
 		return HarnessAttemptRef{}, f.startErr
 	}
+	if !f.unleased && f.ref.Fence.FencingToken == 0 {
+		if f.ref.ID == "" {
+			f.ref.ID = "hat-" + command.RunID
+		}
+		if f.ref.RunID == "" {
+			f.ref.RunID = command.RunID
+		}
+		f.ref.WorkerURL = "http://assigned:8100"
+		f.ref.Fence = postgres.HarnessFence{ProjectID: "p", EnvironmentID: "env", RunID: f.ref.RunID,
+			AttemptID: f.ref.ID, RuntimeWorkerID: "runtime", BrowserWorkerID: "browser", ProfileGeneration: 1, FencingToken: 1}
+	}
 	return f.ref, nil
+}
+
+func (*fakePiStore) MarkRunStarted(context.Context, HarnessAttemptRef) error { return nil }
+func (*fakePiStore) RenewRunLease(context.Context, HarnessAttemptRef, time.Duration) error {
+	return nil
+}
+func (*fakePiStore) ReleaseRunLease(context.Context, HarnessAttemptRef, bool) error { return nil }
+func (*fakePiStore) AbandonUnstartedRun(context.Context, HarnessAttemptRef) error   { return nil }
+
+func (f *fakeHarnessProcess) RunWithRelease(ctx context.Context, req piharness.Request, emit func(piharness.Event)) (bool, error) {
+	return true, f.Run(ctx, req, emit)
+}
+func (f *blockingHarnessProcess) RunWithRelease(ctx context.Context, req piharness.Request, emit func(piharness.Event)) (bool, error) {
+	return true, f.Run(ctx, req, emit)
+}
+func (p *identityHarnessProcess) RunWithRelease(ctx context.Context, req piharness.Request, emit func(piharness.Event)) (bool, error) {
+	return true, p.Run(ctx, req, emit)
+}
+func (p *persistenceFailureProcess) RunWithRelease(ctx context.Context, req piharness.Request, emit func(piharness.Event)) (bool, error) {
+	return true, p.Run(ctx, req, emit)
 }
 
 func (f *fakePiStore) AppendHarnessEvent(_ context.Context, _ HarnessAttemptRef, ev piharness.Event) error {

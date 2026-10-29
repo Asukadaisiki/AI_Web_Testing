@@ -17,7 +17,7 @@ import (
 func managedDeletionRun(t *testing.T) (context.Context, *pgxpool.Pool, *Store, Conversation, Environment, eventbus.Message) {
 	t.Helper()
 	ctx, pool, store := newRepositoryTestStore(t)
-	store.SetManagementEnabled(true)
+
 	conversation := boundConversation(t, ctx, store)
 	environment, err := store.GetConversationEnvironment(ctx, conversation.ID)
 	if err != nil {
@@ -32,7 +32,7 @@ func managedDeletionRun(t *testing.T) (context.Context, *pgxpool.Pool, *Store, C
 	}
 	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
 		ConversationID: conversation.ID, Content: "private-deletion-goal private-deletion-secret",
-		AgentID: "pi", RuntimeID: "pi", HarnessVersionID: harness.ID,
+		RuntimeID: "pi", HarnessVersionID: harness.ID,
 		Model: event.ModelRef{Provider: "scripted", Name: "fixture"}, IdempotencyKey: "delete-managed",
 	})
 	if err != nil {
@@ -231,7 +231,7 @@ func TestManagedDeletionPreservesUnrelatedCommandWithCollidingRoutingKey(t *test
 	}
 	acknowledgeEnvironment(t, ctx, pool, store, otherEnvironment.ID, "provision")
 	_, otherRun, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-		ConversationID: other.ID, Content: "unrelated-goal", AgentID: "pi", RuntimeID: "pi",
+		ConversationID: other.ID, Content: "unrelated-goal", RuntimeID: "pi",
 		HarnessVersionID: command.Payload.Execution.Harness.VersionID,
 		Model:            event.ModelRef{Provider: "scripted", Name: "fixture"}, IdempotencyKey: "other-run",
 	})

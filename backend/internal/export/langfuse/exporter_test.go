@@ -620,12 +620,12 @@ func completionMessage(t *testing.T, eventID string) eventbus.Message {
 		Value: mustJSON(t, event.Envelope[map[string]any]{
 			SchemaVersion: "agenttrace.event.v1",
 			EventID:       eventID,
-			EventType:     "runtime.completed",
+			EventType:     event.RunCompleted,
 			AggregateID:   "run-1",
 			OccurredAt:    occurredAt,
 			CorrelationID: "run-1",
 			Payload: map[string]any{
-				"RunID": "run-1", "Status": "succeeded", "Assistant": "done", "NextCheckpoint": 4,
+				"run_id": "run-1", "status": "succeeded",
 			},
 		}),
 	}

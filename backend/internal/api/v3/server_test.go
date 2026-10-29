@@ -6,50 +6,20 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
+
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
 )
-
-func TestArtifactsServesConfiguredSharedVolumeFile(t *testing.T) {
-	artifactDir := t.TempDir()
-	artifactPath := filepath.Join(artifactDir, "run_1", "evidence.png")
-	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
-		t.Fatalf("create artifact directory: %v", err)
-	}
-	if err := os.WriteFile(artifactPath, []byte("browser screenshot"), 0o600); err != nil {
-		t.Fatalf("write artifact: %v", err)
-	}
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		t.Fatalf("load browser profile: %v", err)
-	}
-	handler := New(ServerConfig{
-		Repository:  &fakeRepository{},
-		Profile:     profile,
-		ArtifactDir: artifactDir,
-		Stream:      stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
-	}).Handler()
-
-	response := request(t, handler, http.MethodGet, "/artifacts/run_1/evidence.png", "")
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
-	}
-	if response.Body.String() != "browser screenshot" {
-		t.Fatalf("artifact = %q, want browser screenshot", response.Body.String())
-	}
-}
 
 func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	repository := &fakeRepository{}
@@ -57,7 +27,7 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 
 	response := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{
 		"content":"verify the cart",
-		"agent_id":"browser-eval",
+		"runtime_id":"pi","harness_id":"version",
 		"model":{"provider":"openai-compatible","name":"glm-5.3-flash","reasoning_effort":"high"},
 		"idempotency_key":"request-1"
 	}`)
@@ -77,14 +47,11 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	}{MessageID: "msg_1", RunID: "run_1", Status: "queued"}) {
 		t.Fatalf("response = %#v", body)
 	}
-	if repository.message.AgentID != "browser-eval" {
-		t.Fatalf("agent id = %q", repository.message.AgentID)
+	if repository.message.RuntimeID != "pi" || repository.message.HarnessVersionID != "version" {
+		t.Fatalf("selectors = %+v", repository.message)
 	}
 	if repository.message.Model != (event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash", ReasoningEffort: "high"}) {
 		t.Fatalf("stored model = %#v, want configured model", repository.message.Model)
-	}
-	if len(repository.message.Operations) != 0 {
-		t.Fatalf("run operations = %#v, want none: the harness owns browser tool dispatch", repository.message.Operations)
 	}
 }
 
@@ -94,79 +61,11 @@ func TestSendMessageRejectsUnconfiguredModel(t *testing.T) {
 
 	response := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{
 		"content":"verify the cart",
-		"agent_id":"browser-eval",
+		"runtime_id":"pi","harness_id":"version",
 		"model":{"provider":"openai-compatible","name":"unapproved-model"},
 		"idempotency_key":"request-unapproved-model"
 	}`)
 	assertErrorCode(t, response, http.StatusBadRequest, "model_not_available")
-}
-
-func TestListProjectsSerializesEmptyProjectsAsArray(t *testing.T) {
-	handler := newTestServer(t, &fakeRepository{}, stream.NewService(
-		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
-	))
-
-	response := request(t, handler, http.MethodGet, "/api/v1/projects", "")
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
-	}
-	var body struct {
-		Projects []json.RawMessage `json:"projects"`
-	}
-	decodeJSON(t, response, &body)
-	if body.Projects == nil {
-		t.Fatalf("projects = null, want []: %s", response.Body.String())
-	}
-	if len(body.Projects) != 0 {
-		t.Fatalf("projects = %#v, want []", body.Projects)
-	}
-}
-
-func TestDeleteWorkspaceResourcesExposeIdempotentNoContentRoutes(t *testing.T) {
-	repository := &fakeRepository{}
-	handler := newTestServer(t, repository, stream.NewService(
-		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
-	))
-
-	for _, test := range []struct {
-		path string
-	}{
-		{path: "/api/v1/projects/prj_1"},
-		{path: "/api/v1/conversations/conv_1"},
-	} {
-		for attempt := 1; attempt <= 2; attempt++ {
-			response := request(t, handler, http.MethodDelete, test.path, "")
-			if response.Code != http.StatusNoContent {
-				t.Fatalf("DELETE %s attempt %d status = %d, want %d: %s",
-					test.path, attempt, response.Code, http.StatusNoContent, response.Body.String())
-			}
-			if response.Body.Len() != 0 {
-				t.Fatalf("DELETE %s attempt %d body = %q, want empty",
-					test.path, attempt, response.Body.String())
-			}
-		}
-	}
-	if len(repository.deletedProjectIDs) != 1 || repository.deletedProjectIDs["prj_1"] != 2 {
-		t.Fatalf("deleted project IDs = %#v", repository.deletedProjectIDs)
-	}
-	if len(repository.deletedConversationIDs) != 1 || repository.deletedConversationIDs["conv_1"] != 2 {
-		t.Fatalf("deleted conversation IDs = %#v", repository.deletedConversationIDs)
-	}
-}
-
-func TestDeleteWorkspaceResourceReportsUnsafeStateAsConflict(t *testing.T) {
-	repository := &fakeRepository{deleteErr: postgres.ErrConflict}
-	handler := newTestServer(t, repository, stream.NewService(
-		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
-	))
-
-	for _, path := range []string{
-		"/api/v1/projects/prj_active",
-		"/api/v1/conversations/conv_active",
-	} {
-		response := request(t, handler, http.MethodDelete, path, "")
-		assertErrorCode(t, response, http.StatusConflict, "conflict")
-	}
 }
 
 func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
@@ -174,7 +73,7 @@ func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
 		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
 	))
 
-	response := request(t, handler, http.MethodGet, "/api/v1/projects/prj_empty/conversations", "")
+	response := request(t, handler, http.MethodGet, "/api/v1/projects/project_1/conversations", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
 	}
@@ -192,7 +91,7 @@ func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
 
 func TestGetConversationSerializesEmptyHistoryAsArrays(t *testing.T) {
 	repository := &fakeRepository{conversation: postgres.Conversation{
-		ID: "conv_empty", ProjectID: "prj_1", Title: "Empty", Metadata: json.RawMessage(`{}`),
+		ID: "conv_empty", ProjectID: "project_1", Title: "Empty", Metadata: json.RawMessage("{}"),
 	}}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
 
@@ -231,12 +130,12 @@ func TestGetConversationReturnsPublicRunLineageWithoutSpecification(t *testing.T
 	secondUpdatedAt := secondFinishedAt
 	repository := &fakeRepository{
 		conversation: postgres.Conversation{
-			ID: "conv_1", ProjectID: "prj_1", Title: "History", Metadata: json.RawMessage(`{}`),
+			ID: "conv_1", ProjectID: "project_1", Title: "History", Metadata: json.RawMessage("{}"),
 		},
 		runs: []domain.Run{
 			{
 				ID:                "run_first",
-				ProjectID:         "prj_1",
+				ProjectID:         "project_1",
 				ConversationID:    "conv_1",
 				SourceMessageID:   "msg_first",
 				RetryOfRunID:      "",
@@ -251,7 +150,7 @@ func TestGetConversationReturnsPublicRunLineageWithoutSpecification(t *testing.T
 			},
 			{
 				ID:                "run_second",
-				ProjectID:         "prj_1",
+				ProjectID:         "project_1",
 				ConversationID:    "conv_1",
 				SourceMessageID:   "msg_second",
 				RetryOfRunID:      "run_first",
@@ -310,7 +209,7 @@ func TestGetRunReturnsPublicLineageWithoutSpecification(t *testing.T) {
 	updatedAt := finishedAt
 	repository := &fakeRepository{run: domain.Run{
 		ID:              "run_1",
-		ProjectID:       "prj_1",
+		ProjectID:       "project_1",
 		ConversationID:  "conv_1",
 		SourceMessageID: "msg_source",
 		RetryOfRunID:    "run_original",
@@ -358,14 +257,14 @@ func TestGetRunReturnsPublicLineageWithoutSpecification(t *testing.T) {
 func TestRerunReturnsAcceptedRun(t *testing.T) {
 	repository := &fakeRepository{rerunResult: domain.Run{
 		ID:           "run_new",
-		RetryOfRunID: "run_failed",
+		RetryOfRunID: "run_1",
 		Status:       domain.RunQueued,
 	}}
 	handler := newTestServer(t, repository, stream.NewService(
 		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
 	))
 
-	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns",
+	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/reruns",
 		`{"idempotency_key":"rerun-api-1"}`)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusAccepted, response.Body.String())
@@ -376,11 +275,11 @@ func TestRerunReturnsAcceptedRun(t *testing.T) {
 		RetryOfRunID string           `json:"retry_of_run_id"`
 	}
 	decodeJSON(t, response, &body)
-	if body.RunID != "run_new" || body.Status != domain.RunQueued || body.RetryOfRunID != "run_failed" {
+	if body.RunID != "run_new" || body.Status != domain.RunQueued || body.RetryOfRunID != "run_1" {
 		t.Fatalf("response = %#v", body)
 	}
 	if repository.rerunInput != (postgres.CreateRerunParams{
-		RunID: "run_failed", IdempotencyKey: "rerun-api-1",
+		RunID: "run_1", IdempotencyKey: "rerun-api-1",
 	}) {
 		t.Fatalf("rerun input = %#v", repository.rerunInput)
 	}
@@ -391,7 +290,7 @@ func TestRerunRejectsInvalidRequests(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "missing idempotency key", body: `{}`},
+		{name: "missing idempotency key", body: "{}"},
 		{name: "blank idempotency key", body: `{"idempotency_key":"  "}`},
 		{name: "unknown field", body: `{"idempotency_key":"rerun-api-1","unexpected":true}`},
 		{name: "multiple JSON values", body: `{"idempotency_key":"rerun-api-1"} {}`},
@@ -402,7 +301,7 @@ func TestRerunRejectsInvalidRequests(t *testing.T) {
 				&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
 			))
 
-			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns", test.body)
+			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/reruns", test.body)
 			assertErrorCode(t, response, http.StatusBadRequest, "invalid_request")
 		})
 	}
@@ -425,7 +324,7 @@ func TestRerunMapsRepositoryErrors(t *testing.T) {
 				&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
 			))
 
-			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns",
+			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/reruns",
 				`{"idempotency_key":"rerun-api-1"}`)
 			assertErrorCode(t, response, test.status, test.code)
 		})
@@ -811,7 +710,7 @@ func TestGetTracePreservesLargeIntegersWhileRedactingSensitiveSiblings(t *testin
 func TestSendMessageDuplicateIdempotencyKeyReturnsSameRun(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
-	body := `{"content":"verify the cart","agent_id":"browser-eval","model":{"provider":"openai-compatible","name":"glm-5.3-flash","reasoning_effort":"high"},"idempotency_key":"request-1"}`
+	body := `{"content":"verify the cart","runtime_id":"pi","harness_id":"version","model":{"provider":"openai-compatible","name":"glm-5.3-flash","reasoning_effort":"high"},"idempotency_key":"request-1"}`
 
 	first := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
 	second := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
@@ -856,7 +755,7 @@ func TestCancelPersistsWhenRedisFails(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, failingLiveStore{}, stream.Config{}))
 
-	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/cancel", `{}`)
+	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/cancel", "{}")
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202: %s", response.Code, response.Body.String())
 	}
@@ -949,24 +848,11 @@ func TestHealthPreservesZeroPendingOutbox(t *testing.T) {
 func TestStrictJSONRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
 	handler := newTestServer(t, &fakeRepository{}, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
 
-	unknown := request(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"A","callback_url":"https://attacker.invalid"}`)
+	unknown := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{"content":"A","callback_url":"https://attacker.invalid"}`)
 	assertErrorCode(t, unknown, http.StatusBadRequest, "invalid_request")
 
-	oversized := request(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"`+strings.Repeat("x", maxRequestBodyBytes)+`"}`)
+	oversized := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{"content":"`+strings.Repeat("x", maxRequestBodyBytes)+`"}`)
 	assertErrorCode(t, oversized, http.StatusRequestEntityTooLarge, "request_too_large")
-}
-
-func TestAgentsDoNotExposeServerCallbackURLsOrCredentials(t *testing.T) {
-	handler := newTestServer(t, &fakeRepository{}, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
-	response := request(t, handler, http.MethodGet, "/api/v1/agents", "")
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
-	}
-	for _, forbidden := range []string{"callback", "worker.internal", "secret"} {
-		if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {
-			t.Fatalf("/agents leaked %q: %s", forbidden, response.Body.String())
-		}
-	}
 }
 
 func TestEventsEmitOnlyPostgreSQLPayloadsAndSequences(t *testing.T) {
@@ -1000,18 +886,15 @@ func TestEventsEmitOnlyPostgreSQLPayloadsAndSequences(t *testing.T) {
 }
 
 func TestEventsHeartbeatAndRequestCancellation(t *testing.T) {
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		t.Fatalf("load browser profile: %v", err)
-	}
-	handler := New(ServerConfig{
-		Repository: &fakeRepository{},
-		Profile:    profile,
+
+	handler := authenticatedTestHandler(New(ServerConfig{
+		Repository:  &fakeRepository{},
+		BridgeToken: testBridgeToken,
 		Stream: stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{
 			ReadBlock: time.Hour,
 		}),
 		HeartbeatInterval: time.Millisecond,
-	}).Handler()
+	}).Handler())
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run_1/events", nil)
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
@@ -1030,49 +913,51 @@ func TestEventsHeartbeatAndRequestCancellation(t *testing.T) {
 	}
 }
 
-func TestResponsePersistsAndEnqueuesContinuation(t *testing.T) {
-	repository := &fakeRepository{}
-	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
-	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_1/responses", `{"kind":"approval","content":"approved","idempotency_key":"response-1"}`)
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
-	}
-	if repository.response.RunID != "run_1" || repository.response.Content != "approved" || !repository.response.Continuation {
-		t.Fatalf("response contract = %#v", repository.response)
-	}
-}
-
 func newTestServer(t *testing.T, repository *fakeRepository, service *stream.Service) http.Handler {
 	t.Helper()
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		t.Fatalf("load browser profile: %v", err)
-	}
-	return New(ServerConfig{
-		Repository: repository,
-		Profile:    profile,
-		Stream:     service,
+
+	return authenticatedTestHandler(New(ServerConfig{
+		Repository:  repository,
+		BridgeToken: testBridgeToken,
+		Runtimes: []execution.Runtime{{ID: "pi", Available: true, Model: execution.Model{
+			Provider: "openai-compatible", Name: "glm-5.3-flash", ReasoningEffort: "high",
+		}}},
+
+		Stream: service,
 		Health: healthDependencies{
 			Postgres: func(context.Context) error { return nil },
 			Kafka:    func(context.Context) error { return nil },
 			Redis:    func(context.Context) error { return nil },
 			Worker:   func(context.Context) error { return nil },
 		},
-	}).Handler()
+	}).Handler())
 }
 
 func newTestServerWithHealth(t *testing.T, repository *fakeRepository, health healthDependencies) http.Handler {
 	t.Helper()
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		t.Fatalf("load browser profile: %v", err)
-	}
-	return New(ServerConfig{
-		Repository: repository,
-		Profile:    profile,
-		Stream:     stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
-		Health:     health,
-	}).Handler()
+
+	return authenticatedTestHandler(New(ServerConfig{
+		Repository:  repository,
+		BridgeToken: testBridgeToken,
+
+		Stream: stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
+		Health: health,
+	}).Handler())
+}
+
+func authenticatedTestHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setTestIdentity(r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setTestIdentity(r *http.Request) {
+	r.Header.Set("Authorization", "Bearer "+testBridgeToken)
+	r.Header.Set("X-Agenttrace-Project-Id", "project_1")
+	r.Header.Set("X-Langfuse-Project-Id", "lf_1")
+	r.Header.Set("X-Agenttrace-Role", "member")
+	r.Header.Set("X-Agenttrace-Actor-Id", "actor_1")
 }
 
 func request(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -1145,7 +1030,6 @@ func waitForBody(t *testing.T, recorder *synchronizedRecorder, want string) {
 type fakeRepository struct {
 	message                postgres.CreateMessageParams
 	cancelledRunID         string
-	response               postgres.SubmitResponseParams
 	pendingOutbox          int
 	conversation           postgres.Conversation
 	messages               []domain.Message
@@ -1170,39 +1054,17 @@ func (r *fakeRepository) RequestCancel(_ context.Context, runID string) error {
 	return nil
 }
 
-func (r *fakeRepository) SubmitResponse(_ context.Context, input postgres.SubmitResponseParams) error {
-	r.response = input
-	return nil
-}
-
 func (r *fakeRepository) PendingOutbox(context.Context) (int, error) {
 	return r.pendingOutbox, nil
 }
 
-func (r *fakeRepository) ListProjects(context.Context) ([]postgres.Project, error) { return nil, nil }
-func (r *fakeRepository) CreateProject(context.Context, postgres.CreateProjectParams) (postgres.Project, error) {
-	return postgres.Project{}, nil
-}
-func (r *fakeRepository) DeleteProject(_ context.Context, projectID string) error {
-	if r.deletedProjectIDs == nil {
-		r.deletedProjectIDs = map[string]int{}
-	}
-	r.deletedProjectIDs[projectID]++
-	return r.deleteErr
-}
 func (r *fakeRepository) ListConversations(context.Context, string) ([]postgres.Conversation, error) {
 	return nil, nil
 }
 func (r *fakeRepository) CreateConversation(context.Context, postgres.CreateConversationParams) (postgres.Conversation, error) {
 	return postgres.Conversation{}, nil
 }
-func (r *fakeRepository) DeleteConversation(_ context.Context, conversationID string) error {
-	if r.deletedConversationIDs == nil {
-		r.deletedConversationIDs = map[string]int{}
-	}
-	r.deletedConversationIDs[conversationID]++
-	return r.deleteErr
-}
+
 func (r *fakeRepository) GetConversation(
 	context.Context,
 	string,
@@ -1210,13 +1072,17 @@ func (r *fakeRepository) GetConversation(
 	if r.conversation.ID != "" {
 		return r.conversation, r.messages, r.runs, nil
 	}
-	return postgres.Conversation{}, nil, nil, postgres.ErrNotFound
+	return postgres.Conversation{ID: "conv_1", ProjectID: "project_1"}, r.messages, r.runs, nil
 }
 func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {
 	if r.run.ID != "" {
 		return r.run, nil
 	}
-	return domain.Run{}, postgres.ErrNotFound
+	return domain.Run{ID: "run_1", ProjectID: "project_1", ConversationID: "conv_1"}, nil
+}
+
+func (*fakeRepository) GetProjectBinding(context.Context, string) (postgres.ProjectBinding, error) {
+	return postgres.ProjectBinding{AgenttraceProjectID: "project_1", LangfuseProjectID: "lf_1", Status: "active"}, nil
 }
 func (r *fakeRepository) CreateRerun(_ context.Context, input postgres.CreateRerunParams) (domain.Run, error) {
 	r.rerunInput = input

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -47,10 +48,7 @@ func leaseTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store) {
 
 func leaseFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, s *Store, suffix string) LeaseClaim {
 	t.Helper()
-	// Create the legacy fixture before enabling management so no registry or
-	// lifecycle provider participates in this scheduler test.
-	s.SetManagementEnabled(false)
-	p, err := s.CreateProject(ctx, CreateProjectParams{Name: suffix})
+	p, err := s.CreateProject(ctx, managedProjectParams(CreateProjectParams{Name: suffix}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,16 +56,16 @@ func leaseFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, s *Stor
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := s.CreateMessageAndRun(ctx, CreateMessageParams{ConversationID: c.ID, Content: "test", AgentID: "test", Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: suffix})
+	_, run, err := s.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, s, CreateMessageParams{ConversationID: c.ID, Content: "test", Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: suffix}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	envID := "env_" + suffix
-	if _, err := pool.Exec(ctx, `INSERT INTO environments(id,project_id,conversation_id,state) VALUES($1,$2,$3,'ready')`, envID, p.ID, c.ID); err != nil {
+	env, err := s.GetConversationEnvironment(ctx, c.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	s.SetManagementEnabled(true)
-	return LeaseClaim{RunID: run.ID, ProjectID: p.ID, EnvironmentID: envID, ProfileGeneration: 1, RuntimeWorkerID: "runtime", ProviderAttemptID: "provider_" + suffix, TTL: time.Minute}
+
+	return LeaseClaim{RunID: run.ID, ProjectID: p.ID, EnvironmentID: env.ID, ProfileGeneration: 1, RuntimeID: "pi", RuntimeWorkerID: "runtime", ProviderAttemptID: "provider_" + suffix, TTL: time.Minute}
 }
 
 func registerUnboundLeaseWorkers(t *testing.T, ctx context.Context, s *Store, capacity int) {
@@ -331,6 +329,8 @@ func TestLeaseClaimAndFinalizeRollbackOnDatabaseFault(t *testing.T) {
 	ctx, pool, s := leaseTestStore(t)
 	p := leaseFixture(t, ctx, pool, s, "fault")
 	registerLeaseWorkers(t, ctx, s, 1)
+	var initialToken int
+	leaseTestScan(t, pool.QueryRow(ctx, `SELECT fencing_token FROM environments WHERE id=$1`, p.EnvironmentID), &initialToken)
 	if _, err := pool.Exec(ctx, `CREATE FUNCTION lease_reject() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected lease fault'; END $$;
 		CREATE TRIGGER lease_reject BEFORE INSERT ON environment_leases FOR EACH ROW EXECUTE FUNCTION lease_reject()`); err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestLeaseClaimAndFinalizeRollbackOnDatabaseFault(t *testing.T) {
 	var state string
 	leaseTestScan(t, pool.QueryRow(ctx, `SELECT sum(in_use) FROM worker_nodes`), &used)
 	leaseTestScan(t, pool.QueryRow(ctx, `SELECT fencing_token,state FROM environments WHERE id=$1`, p.EnvironmentID), &token, &state)
-	if used != 0 || token != 0 || state != "ready" {
+	if used != 0 || token != initialToken || state != "ready" {
 		t.Fatalf("claim rollback left partial facts: used=%d token=%d state=%s", used, token, state)
 	}
 	if _, err := pool.Exec(ctx, `DROP TRIGGER lease_reject ON environment_leases`); err != nil {
@@ -453,15 +453,6 @@ func TestLeaseRootEvidenceAndUncertainCompletionAreFenced(t *testing.T) {
 	if used != 0 {
 		t.Fatal("uncertain recovery leaked capacity")
 	}
-}
-
-func TestLeaseManagementDisallowsUnfencedLegacyAttemptClaim(t *testing.T) {
-	ctx, pool, s := leaseTestStore(t)
-	p := leaseFixture(t, ctx, pool, s, "legacy-bypass")
-	if _, err := s.BeginHarnessAttempt(ctx, p.RunID, p.ProviderAttemptID); err == nil {
-		t.Fatal("management attempt bypassed capacity and lease allocation")
-	}
-	assertRowCount(t, ctx, pool, "harness_attempts", 0)
 }
 
 func TestLeaseUnstartedAbandonmentRequiresDurableNoSDKProof(t *testing.T) {

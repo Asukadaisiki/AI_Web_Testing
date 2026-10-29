@@ -9,8 +9,14 @@ import (
 
 func TestRegistryImmutablePublicationAndProjectIsolation(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
-	p1, _ := store.CreateProject(ctx, CreateProjectParams{Name: "one"})
-	p2, _ := store.CreateProject(ctx, CreateProjectParams{Name: "two"})
+	p1, err := store.CreateProject(ctx, CreateProjectParams{Name: "one", LangfuseProjectID: "lf-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := store.CreateProject(ctx, CreateProjectParams{Name: "two", LangfuseProjectID: "lf-two"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	draft, err := store.UploadSkill(ctx, p1.ID, "author", "login", []registry.File{{Path: "SKILL.md", Content: "Use this instruction."}})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +55,7 @@ func TestRegistryImmutablePublicationAndProjectIsolation(t *testing.T) {
 
 func TestRegistryBrowserCapabilityMaterializesWithoutLaunchFields(t *testing.T) {
 	ctx, _, store := newRepositoryTestStore(t)
-	project, err := store.CreateProject(ctx, CreateProjectParams{Name: "browser"})
+	project, err := store.CreateProject(ctx, CreateProjectParams{Name: "browser", LangfuseProjectID: "lf-browser"})
 	if err != nil {
 		t.Fatal(err)
 	}

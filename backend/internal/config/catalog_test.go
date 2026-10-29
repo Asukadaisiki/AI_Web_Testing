@@ -43,27 +43,6 @@ func TestRuntimeCatalogHasPublicModelsAndLocalReadinessOnly(t *testing.T) {
 	}
 }
 
-func TestBuiltinHarnessConfigDefaultsAndOverrides(t *testing.T) {
-	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://unused")
-	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "unused:9092")
-	t.Setenv("AGENTTRACE_BUILTIN_HARNESS_DIR", "")
-	t.Setenv("AGENTTRACE_BUILTIN_MCP_COMMAND", "")
-	t.Setenv("AGENTTRACE_BUILTIN_MCP_ENTRY", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BuiltinHarnessDirectory != "../pi-browser-harness/resources" || cfg.BuiltinMCPCommand != "node" || cfg.BuiltinMCPEntry != "../pi-browser-harness/dist/mcp/server.js" {
-		t.Fatal("builtin resource defaults are not native")
-	}
-	t.Setenv("AGENTTRACE_BUILTIN_HARNESS_DIR", "/resources")
-	t.Setenv("AGENTTRACE_BUILTIN_MCP_ENTRY", "/compiled/server.js")
-	cfg, err = Load()
-	if err != nil || cfg.BuiltinHarnessDirectory != "/resources" || cfg.BuiltinMCPEntry != "/compiled/server.js" {
-		t.Fatal("builtin resource overrides ignored")
-	}
-}
-
 func TestRuntimeCatalogDoesNotAdvertiseUnsupportedCredentialFallbacks(t *testing.T) {
 	cfg := Config{
 		Model:   Model{Provider: "scripted"},

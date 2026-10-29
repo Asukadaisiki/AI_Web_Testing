@@ -33,7 +33,6 @@ type releaseAwareHarnessProcess interface {
 type PiRunner struct {
 	Process                HarnessProcessRunner
 	Store                  PiTraceStore
-	WorkerURL              string
 	DefaultReasoningEffort string
 	LeaseTTL               time.Duration
 }
@@ -65,38 +64,33 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 	runState := &piRunState{}
 	processCtx, cancelProcess := context.WithCancel(ctx)
 	defer cancelProcess()
-	managed := ref.Fence.FencingToken > 0
-	var leases PiLeaseStore
-	var releaseProcess releaseAwareHarnessProcess
+	if ref.Fence.FencingToken <= 0 || ref.Fence.ProjectID == "" || ref.Fence.EnvironmentID == "" ||
+		ref.Fence.ProfileGeneration <= 0 || ref.Fence.RuntimeWorkerID == "" || ref.Fence.BrowserWorkerID == "" {
+		return errors.New("harness attempt requires a current managed fence")
+	}
+	leases, ok := r.Store.(PiLeaseStore)
+	if !ok {
+		return errors.New("managed pi store requires lease lifecycle support")
+	}
+	releaseProcess, ok := r.Process.(releaseAwareHarnessProcess)
+	if !ok {
+		return errors.New("managed harness transport requires explicit release acknowledgement")
+	}
 	leaseErrors := make(chan error, 1)
 	leaseDone := make(chan struct{})
 	leaseExited := make(chan struct{})
-	if managed {
-		var ok bool
-		leases, ok = r.Store.(PiLeaseStore)
-		if !ok {
-			return errors.New("managed pi store requires lease lifecycle support")
-		}
-		releaseProcess, ok = r.Process.(releaseAwareHarnessProcess)
-		if !ok {
-			return errors.New("managed harness transport requires explicit release acknowledgement")
-		}
-		command.ProjectID = ref.Fence.ProjectID
-		command.EnvironmentID = ref.Fence.EnvironmentID
-		command.ProfileGeneration = ref.Fence.ProfileGeneration
-		command.FencingToken = ref.Fence.FencingToken
-		go r.watchLease(ctx, ref, leases, cancelProcess, leaseDone, leaseExited, leaseErrors)
-		defer func() {
-			close(leaseDone)
-			<-leaseExited
-		}()
-	}
-	workerURL := r.WorkerURL
-	if managed {
-		workerURL = ref.WorkerURL
-		if strings.TrimSpace(workerURL) == "" {
-			return errors.New("managed harness browser assignment endpoint is required")
-		}
+	command.ProjectID = ref.Fence.ProjectID
+	command.EnvironmentID = ref.Fence.EnvironmentID
+	command.ProfileGeneration = ref.Fence.ProfileGeneration
+	command.FencingToken = ref.Fence.FencingToken
+	go r.watchLease(ctx, ref, leases, cancelProcess, leaseDone, leaseExited, leaseErrors)
+	defer func() {
+		close(leaseDone)
+		<-leaseExited
+	}()
+	workerURL := ref.WorkerURL
+	if strings.TrimSpace(workerURL) == "" {
+		return errors.New("managed harness browser assignment endpoint is required")
 	}
 	request := buildHarnessRequest(command, workerURL, ref.ProviderAttemptID, r.DefaultReasoningEffort)
 	watchDone := make(chan struct{})
@@ -117,13 +111,9 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 			}
 			runState.observe(ev)
 		}
-		if managed {
-			processErr = leases.MarkRunStarted(ctx, ref)
-			if processErr == nil {
-				released, processErr = releaseProcess.RunWithRelease(processCtx, request, onEvent)
-			}
-		} else {
-			processErr = r.Process.Run(processCtx, request, onEvent)
+		processErr = leases.MarkRunStarted(ctx, ref)
+		if processErr == nil {
+			released, processErr = releaseProcess.RunWithRelease(processCtx, request, onEvent)
 		}
 	}
 	close(watchDone)
@@ -150,7 +140,7 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		processErr = fmt.Errorf("read cancellation state before completion: %w", cancelErr)
 	}
 	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested || cancelRequested)
-	if managed && !released && !ref.CancelRequested {
+	if !released && !ref.CancelRequested {
 		outcome.Status = domain.RunFailed
 		outcome.Uncertain = true
 		if outcome.Error == "" {
@@ -177,17 +167,15 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 	if status != "" {
 		outcome.Status = status
 	}
-	if managed {
-		if ref.CancelRequested {
-			if err := leases.AbandonUnstartedRun(completeCtx, ref); err != nil {
-				return fmt.Errorf("abandon unstarted pi lease: %w", err)
-			}
-		} else if !released {
-			return &terminalRunError{cause: errors.New(outcome.Error)}
-		} else {
-			if err := leases.ReleaseRunLease(completeCtx, ref, released); err != nil {
-				return fmt.Errorf("release pi lease: %w", err)
-			}
+	if ref.CancelRequested {
+		if err := leases.AbandonUnstartedRun(completeCtx, ref); err != nil {
+			return fmt.Errorf("abandon unstarted pi lease: %w", err)
+		}
+	} else if !released {
+		return &terminalRunError{cause: errors.New(outcome.Error)}
+	} else {
+		if err := leases.ReleaseRunLease(completeCtx, ref, released); err != nil {
+			return fmt.Errorf("release pi lease: %w", err)
 		}
 	}
 	if outcome.Status == domain.RunSucceeded {
@@ -352,9 +340,6 @@ func buildHarnessRequest(
 		} else {
 			goal = message.Content
 		}
-	}
-	if workerURL == "" {
-		workerURL = command.WorkerURL
 	}
 	artifactScope := command.ArtifactScope
 	if strings.TrimSpace(artifactScope) == "" {

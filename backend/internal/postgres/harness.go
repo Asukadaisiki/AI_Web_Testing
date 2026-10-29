@@ -13,9 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrRunAlreadyTerminal is returned by BeginHarnessAttempt when the run is
-// already in a terminal state. The runtime must not spawn a child process for
-// such a replay.
+// ErrRunAlreadyTerminal prevents a managed claim from replaying a terminal run.
 var ErrRunAlreadyTerminal = errors.New("run is already terminal")
 
 // CancellationRequested reports whether the durable run status requires an
@@ -48,130 +46,6 @@ type HarnessAttempt struct {
 	// was claimed. The runtime uses it to force RunCancelled regardless of the
 	// harness verdict.
 	CancelRequested bool
-}
-
-// BeginHarnessAttempt claims a run only if it has never had a harness attempt.
-// A prior attempt on a nonterminal run is reconciled to a failed terminal state,
-// not reexecuted. Callers must serialize deliveries through the command inbox:
-// a duplicate cannot enter here while the original delivery is still executing.
-func (s *Store) BeginHarnessAttempt(
-	ctx context.Context,
-	runID, providerAttemptID string,
-) (HarnessAttempt, error) {
-	if s == nil || s.pool == nil {
-		return HarnessAttempt{}, errors.New("postgres store is not configured")
-	}
-	if s.ManagementEnabled() {
-		return HarnessAttempt{}, errors.New("managed attempts require atomic ClaimHarnessLease")
-	}
-	if strings.TrimSpace(runID) == "" {
-		return HarnessAttempt{}, errors.New("harness attempt run id is required")
-	}
-	if strings.TrimSpace(providerAttemptID) == "" {
-		return HarnessAttempt{}, errors.New("harness provider attempt id is required")
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return HarnessAttempt{}, fmt.Errorf("begin harness attempt: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	run, err := scanRun(tx.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id,
-		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
-		       status, specification, checkpoint_version,
-		       cancel_requested_at, started_at, finished_at, created_at, updated_at
-		FROM runs WHERE id = $1 FOR UPDATE`, runID))
-	if errors.Is(err, ErrNotFound) {
-		return HarnessAttempt{}, fmt.Errorf("run %q: %w", runID, ErrNotFound)
-	}
-	if err != nil {
-		return HarnessAttempt{}, fmt.Errorf("lock run for harness attempt: %w", err)
-	}
-	if isTerminalStatus(run.Status) {
-		return HarnessAttempt{}, ErrRunAlreadyTerminal
-	}
-
-	var prior HarnessAttempt
-	err = tx.QueryRow(ctx, `
-		SELECT id, started_at FROM harness_attempts
-		WHERE run_id = $1 ORDER BY attempt_number DESC LIMIT 1`,
-		runID).Scan(&prior.ID, &prior.StartedAt)
-	if err == nil {
-		// Finish locks conversation before run. Release this run lock first to
-		// avoid inverting that order; its terminal decision remains atomic.
-		if err := tx.Rollback(ctx); err != nil {
-			return HarnessAttempt{}, fmt.Errorf("release run for reconciliation: %w", err)
-		}
-		recoveryStatus := domain.RunFailed
-		if run.CancelRequestedAt != nil || run.Status == domain.RunCancelling {
-			recoveryStatus = domain.RunCancelled
-		}
-		_, err := s.FinishHarnessAttempt(ctx, HarnessFinish{
-			RunID: runID, AttemptID: prior.ID, Status: recoveryStatus,
-			Error: json.RawMessage(`{"code":"needs_reconciliation","message":"Prior harness attempt has no durable terminal outcome; automatic replay blocked. Reconcile external side effects before explicitly retrying as a new run."}`),
-			Event: event.Envelope[json.RawMessage]{
-				SchemaVersion: "agenttrace.event.v1",
-				EventID:       "harness-reconciliation:" + prior.ID,
-				EventType:     event.RunCompleted,
-				AggregateID:   runID,
-				CorrelationID: runID,
-				OccurredAt:    prior.StartedAt,
-			},
-		})
-		if err != nil {
-			return HarnessAttempt{}, fmt.Errorf("reconcile prior harness attempt: %w", err)
-		}
-		return HarnessAttempt{}, ErrRunAlreadyTerminal
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return HarnessAttempt{}, fmt.Errorf("read prior harness attempt: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE runs
-		SET status = 'running',
-		    started_at = COALESCE(started_at, now()),
-		    updated_at = now()
-		WHERE id = $1
-		  AND status IN ('queued', 'running', 'cancelling')`, runID); err != nil {
-		return HarnessAttempt{}, fmt.Errorf("claim run for harness attempt: %w", err)
-	}
-
-	var attemptNumber int
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(attempt_number), 0) + 1
-		FROM harness_attempts
-		WHERE run_id = $1`, runID).Scan(&attemptNumber); err != nil {
-		return HarnessAttempt{}, fmt.Errorf("next harness attempt number: %w", err)
-	}
-	attemptID, err := newID("hat")
-	if err != nil {
-		return HarnessAttempt{}, err
-	}
-	var startedAt time.Time
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO harness_attempts (
-			id, run_id, attempt_number, provider_attempt_id, status, started_at
-		) VALUES ($1, $2, $3, $4, 'active', now())
-		RETURNING started_at`,
-		attemptID, runID, attemptNumber, providerAttemptID,
-	).Scan(&startedAt); err != nil {
-		return HarnessAttempt{}, fmt.Errorf("insert harness attempt: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return HarnessAttempt{}, fmt.Errorf("commit harness attempt: %w", err)
-	}
-	return HarnessAttempt{
-		ID:                attemptID,
-		RunID:             runID,
-		AttemptNumber:     attemptNumber,
-		ProviderAttemptID: providerAttemptID,
-		Status:            "active",
-		StartedAt:         startedAt,
-		CancelRequested:   run.CancelRequestedAt != nil || run.Status == domain.RunCancelling,
-	}, nil
 }
 
 // HarnessEventRecord is one validated harness event and the optional trace
@@ -212,7 +86,7 @@ type ToolAttemptRef struct {
 // evidence. An exact replay (same source identity and payload) is a no-op. The
 // same source identity with a different payload is a conflict.
 func (s *Store) AppendHarnessEvent(ctx context.Context, record HarnessEventRecord) (resultErr error) {
-	if s != nil && s.ManagementEnabled() {
+	if s != nil {
 		defer func() { s.ObserveLeaseResult(ctx, record.Fence.EnvironmentID, resultErr) }()
 	}
 	if s == nil || s.pool == nil {
@@ -232,13 +106,11 @@ func (s *Store) AppendHarnessEvent(ctx context.Context, record HarnessEventRecor
 	}
 	defer tx.Rollback(ctx)
 
-	if s.ManagementEnabled() {
-		if record.Fence.RunID != record.RunID || record.Fence.AttemptID != record.AttemptID {
-			return ErrStaleFence
-		}
-		if _, err := lockHarnessFence(ctx, tx, record.Fence, false); err != nil {
-			return err
-		}
+	if record.Fence.RunID != record.RunID || record.Fence.AttemptID != record.AttemptID {
+		return ErrStaleFence
+	}
+	if _, err := lockHarnessFence(ctx, tx, record.Fence, false); err != nil {
+		return err
 	}
 
 	var attemptRunID string
@@ -407,7 +279,7 @@ type HarnessFinish struct {
 // conflicting terminal state is an error. The returned status is the effective
 // verdict chosen under the run lock; a durable cancellation overrides the input.
 func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) (resultStatus domain.RunStatus, resultErr error) {
-	if s != nil && s.ManagementEnabled() {
+	if s != nil {
 		defer func() { s.ObserveLeaseResult(ctx, finish.Fence.EnvironmentID, resultErr) }()
 	}
 	if s == nil || s.pool == nil {
@@ -431,13 +303,11 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 	}
 	defer tx.Rollback(ctx)
 
-	if s.ManagementEnabled() {
-		if finish.Fence.RunID != finish.RunID || finish.Fence.AttemptID != finish.AttemptID {
-			return "", ErrStaleFence
-		}
-		if _, err := lockHarnessFence(ctx, tx, finish.Fence, false); err != nil {
-			return "", err
-		}
+	if finish.Fence.RunID != finish.RunID || finish.Fence.AttemptID != finish.AttemptID {
+		return "", ErrStaleFence
+	}
+	if _, err := lockHarnessFence(ctx, tx, finish.Fence, false); err != nil {
+		return "", err
 	}
 
 	var conversationID string
@@ -459,7 +329,7 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 		}
 		return "", fmt.Errorf("lock run for harness finish: %w", err)
 	}
-	if s.ManagementEnabled() && finish.Uncertain {
+	if finish.Uncertain {
 		// A lost cleanup result is not evidence of a completed cancellation.
 		finish.Status = domain.RunFailed
 	} else if existingStatus == domain.RunCancelling || existingStatus == domain.RunCancelled {
@@ -530,7 +400,7 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 		return finish.Status, fmt.Errorf("finish harness trace root: %w", err)
 	}
 	attemptStatus := string(finish.Status)
-	if s.ManagementEnabled() && finish.Uncertain {
+	if finish.Uncertain {
 		attemptStatus = "lost"
 	}
 	if _, err := tx.Exec(ctx, `
@@ -570,17 +440,15 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 	if !inserted {
 		return finish.Status, ErrConflict
 	}
-	if s.ManagementEnabled() {
-		if _, err := tx.Exec(ctx, `UPDATE environment_leases SET state='releasing' WHERE environment_id=$1`, finish.Fence.EnvironmentID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE environment_leases SET state='releasing' WHERE environment_id=$1`, finish.Fence.EnvironmentID); err != nil {
+		return finish.Status, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE worker_assignments SET state='releasing' WHERE attempt_id=$1`, finish.AttemptID); err != nil {
+		return finish.Status, err
+	}
+	if finish.Uncertain {
+		if _, err := tx.Exec(ctx, `UPDATE environments SET state='needs_review',updated_at=now() WHERE id=$1`, finish.Fence.EnvironmentID); err != nil {
 			return finish.Status, err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE worker_assignments SET state='releasing' WHERE attempt_id=$1`, finish.AttemptID); err != nil {
-			return finish.Status, err
-		}
-		if finish.Uncertain {
-			if _, err := tx.Exec(ctx, `UPDATE environments SET state='needs_review',updated_at=now() WHERE id=$1`, finish.Fence.EnvironmentID); err != nil {
-				return finish.Status, err
-			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

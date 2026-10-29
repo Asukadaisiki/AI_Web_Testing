@@ -8,7 +8,7 @@ import (
 
 func TestManagementBindingEndpointUsesAuthenticatedScope(t *testing.T) {
 	repository := ownedManagementRepository()
-	handler := New(ServerConfig{Repository: repository, ManagementEnabled: true, BridgeToken: testBridgeToken}).Handler()
+	handler := New(ServerConfig{Repository: repository, BridgeToken: testBridgeToken}).Handler()
 	got := managementRequest(handler, "GET", "/api/v1/projects/project_1/binding", "", "member")
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"agenttrace_project_id":"project_1"`) ||
 		!strings.Contains(got.Body.String(), `"langfuse_project_id":"lf_1"`) {

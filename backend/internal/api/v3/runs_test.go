@@ -124,7 +124,7 @@ func TestPublicRunProjectionPrivacyAcrossEndpoints(t *testing.T) {
 	repository.run = frozenPublicRunFixture()
 	repository.runs = []domain.Run{repository.run}
 	handler := New(ServerConfig{
-		Repository: repository, ManagementEnabled: true, BridgeToken: testBridgeToken,
+		Repository: repository, BridgeToken: testBridgeToken,
 	}).Handler()
 	for _, path := range []string{
 		"/api/v1/runs/run_1",
@@ -181,7 +181,7 @@ func TestPublicRunProjectionHistoryStaysFrozenAfterRegistryPublish(t *testing.T)
 	repository.run = frozenPublicRunFixture()
 	repository.runs = []domain.Run{repository.run}
 	config := ServerConfig{
-		Repository: repository, ManagementEnabled: true, BridgeToken: testBridgeToken,
+		Repository: repository, BridgeToken: testBridgeToken,
 	}
 	handler := New(config).Handler()
 	paths := []string{

@@ -6,19 +6,15 @@
 
 from __future__ import annotations
 
-import contextlib
 import sys
 import unittest
 from pathlib import Path
-from typing import AsyncIterator
 
 WORKER_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = Path(__file__).resolve().parent
 for _path in (str(WORKER_ROOT), str(TESTS_DIR)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
-
-import httpx  # noqa: E402
 
 from case_builder import (  # noqa: E402
     action_step,
@@ -32,25 +28,10 @@ from local_site import LocalSite  # noqa: E402
 from pw_support import run  # noqa: E402
 
 from loop_worker.evidence import artifacts_dir, session_dir  # noqa: E402
-from loop_worker.main import create_app  # noqa: E402
+from tests.managed_api import api_client, execute_payload  # noqa: E402
 
 #: 领域会话 id：执行器据此把证据落到 <产物根>/<session_id>/（CONTRACT §9.2）。
 SESSION = "sess_test"
-
-
-@contextlib.asynccontextmanager
-async def api_client(
-    *, raise_app_exceptions: bool = True
-) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app()
-    transport = httpx.ASGITransport(
-        app=app, raise_app_exceptions=raise_app_exceptions
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://worker.test") as client:
-        try:
-            yield client
-        finally:
-            await app.state.session_manager.shutdown()
 
 
 class HealthAndErrorsTest(unittest.TestCase):
@@ -110,7 +91,7 @@ class HealthAndErrorsTest(unittest.TestCase):
                 ]
             )
             response = await client.post(
-                "/execute", json={"session_id": SESSION, "case": case}
+                "/execute", json=execute_payload(case)
             )
             self.assertEqual(response.status_code, 400)
             body = response.json()
@@ -122,7 +103,7 @@ class HealthAndErrorsTest(unittest.TestCase):
 
     async def _execute_rejects_malformed_body_with_400(self) -> None:
         async with api_client() as client:
-            response = await client.post("/execute", json={"case": "not an object"})
+            response = await client.post("/execute", json=execute_payload("not an object"))
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.json()["error"], "case_invalid_json")
 
@@ -132,7 +113,9 @@ class HealthAndErrorsTest(unittest.TestCase):
     async def _execute_requires_a_session_id(self) -> None:
         # 没有会话就没法归属产物，所以 body 里必须带 session_id（CONTRACT §9.2）。
         async with api_client() as client:
-            response = await client.post("/execute", json={"case": {}})
+            payload = execute_payload({})
+            del payload["session_id"]
+            response = await client.post("/execute", json=payload)
             self.assertEqual(response.status_code, 400)
             self.assertIn("session_id", response.text)
 
@@ -147,7 +130,7 @@ class SessionLifecycleTest(unittest.TestCase):
         self,
     ) -> None:
         async with api_client(raise_app_exceptions=False) as client:
-            created = await client.post("/sessions", json={"session_id": SESSION})
+            created = await client.open(SESSION)
             self.assertEqual(created.status_code, 200, created.text)
             session_id = created.json()["session_id"]
 
@@ -174,7 +157,7 @@ class SessionLifecycleTest(unittest.TestCase):
     async def _authoring_assert_count_accepts_non_unique_locators(self) -> None:
         with LocalSite() as site:
             async with api_client() as client:
-                created = await client.post("/sessions", json={"session_id": SESSION})
+                created = await client.open(SESSION)
                 session_id = created.json()["session_id"]
                 navigated = await client.post(
                     f"/sessions/{session_id}/navigate",
@@ -221,7 +204,7 @@ class SessionLifecycleTest(unittest.TestCase):
     async def _authoring_assertions_evaluate_without_mutating_the_page(self) -> None:
         with LocalSite() as site:
             async with api_client() as client:
-                created = await client.post("/sessions", json={"session_id": SESSION})
+                created = await client.open(SESSION)
                 session_id = created.json()["session_id"]
                 navigated = await client.post(
                     f"/sessions/{session_id}/navigate",
@@ -284,7 +267,7 @@ class SessionLifecycleTest(unittest.TestCase):
     async def _authoring_act_waits_for_postconditions_before_observing(self) -> None:
         with LocalSite() as site:
             async with api_client() as client:
-                created = await client.post("/sessions", json={"session_id": SESSION})
+                created = await client.open(SESSION)
                 self.assertEqual(created.status_code, 200)
                 session_id = created.json()["session_id"]
 
@@ -325,7 +308,7 @@ class SessionLifecycleTest(unittest.TestCase):
     async def _authoring_act_returns_failed_response_for_unmet_condition(self) -> None:
         with LocalSite() as site:
             async with api_client() as client:
-                created = await client.post("/sessions", json={"session_id": SESSION})
+                created = await client.open(SESSION)
                 session_id = created.json()["session_id"]
                 navigated = await client.post(
                     f"/sessions/{session_id}/navigate",
@@ -366,7 +349,7 @@ class SessionLifecycleTest(unittest.TestCase):
         with LocalSite() as site:
             index_url = site.url("index.html")
             async with api_client() as client:
-                created = await client.post("/sessions", json={"session_id": SESSION})
+                created = await client.open(SESSION)
                 self.assertEqual(created.status_code, 200)
                 browser_session_id = created.json()["session_id"]
                 # 返回的是浏览器会话句柄，不是领域会话（CONTRACT §9.3）。
@@ -483,8 +466,10 @@ class SessionLifecycleTest(unittest.TestCase):
                 base_url=site.base_url,
             )
             async with api_client() as client:
+                created = await client.open(SESSION)
+                browser_session_id = created.json()["session_id"]
                 response = await client.post(
-                    "/execute", json={"session_id": SESSION, "case": case}
+                    "/execute", json=execute_payload(case, browser_session_id)
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 result = response.json()
@@ -504,6 +489,8 @@ class SessionLifecycleTest(unittest.TestCase):
                     self.assertIsInstance(step["evidence"]["console"], list)
                     self.assertIsInstance(step["evidence"]["network"], list)
                     self.assertIsNone(step["error"])
+                self.assertFalse(client.manager.get(browser_session_id).closed)
+                self.assertEqual(client.manager.get(browser_session_id).page.url, "about:blank")
 
 
 if __name__ == "__main__":

@@ -396,7 +396,9 @@ func newRuntimePostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *pos
 	if err := postgres.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate PostgreSQL: %v", err)
 	}
-	return ctx, pool, postgres.NewStore(pool)
+	store := postgres.NewStore(pool)
+	rememberFixturePool(t, store, pool)
+	return ctx, pool, store
 }
 
 func runtimeTestDatabaseName(dsn string) (string, error) {

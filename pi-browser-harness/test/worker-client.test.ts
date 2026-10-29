@@ -1,3 +1,4 @@
+import { workerOptions } from "./fixtures/selected-harness.js";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
@@ -332,12 +333,13 @@ it("sends lease metadata and host auth on every managed browser request", async 
     else sendJson(response, observation);
   });
   const environmentLease = { project_id: "p", environment_id: "env", profile_generation: 2, fencing_token: 7 };
-  const client = new WorkerClient(baseUrl, { environmentLease, providerToken: "host-only-secret" });
+  const client = new WorkerClient(baseUrl, { ...workerOptions, environmentLease, providerToken: "host-only-secret" });
   const id = await client.openSession("scope");
   await client.navigate(id, "https://shop.test");
   await client.act(id, actRequest);
   await client.execute("scope", artifact);
   await client.closeSession(id);
+  await expect(client.execute("scope", artifact)).rejects.toThrow("held browser session");
   expect(seen[0]?.body).toEqual({ session_id: "scope", ...environmentLease });
   expect(seen.find((r) => r.path === "/execute")?.body).toEqual({
     session_id: "scope", case: artifact, ...environmentLease, browser_session_id: id,
@@ -386,7 +388,7 @@ describe("WorkerClient", () => {
         sendJson(response, { error: "not_found", detail: "unexpected route" });
       }
     });
-    const client = new WorkerClient(baseUrl);
+    const client = new WorkerClient(baseUrl, workerOptions);
 
     await expect(client.openSession("scope_1")).resolves.toBe("bsess_1");
     await expect(
@@ -401,7 +403,7 @@ describe("WorkerClient", () => {
     await expect(client.closeSession("bsess_1")).resolves.toBeUndefined();
 
     expect(requests).toEqual([
-      { method: "POST", path: "/sessions", body: { session_id: "scope_1" } },
+      { method: "POST", path: "/sessions", body: { session_id: "scope_1", ...workerOptions.environmentLease } },
       {
         method: "POST",
         path: "/sessions/bsess_1/navigate",
@@ -415,7 +417,8 @@ describe("WorkerClient", () => {
       {
         method: "POST",
         path: "/execute",
-        body: { session_id: "scope_1", case: artifact },
+        body: { session_id: "scope_1", case: artifact,
+          ...workerOptions.environmentLease, browser_session_id: "bsess_1" },
       },
       {
         method: "DELETE",
@@ -433,7 +436,7 @@ describe("WorkerClient", () => {
         detail: "browser session bsess_missing does not exist",
       });
     });
-    const client = new WorkerClient(baseUrl);
+    const client = new WorkerClient(baseUrl, workerOptions);
 
     const promise = client.navigate("bsess_missing", "https://shop.test");
     await expect(promise).rejects.toMatchObject({
@@ -451,7 +454,7 @@ describe("WorkerClient", () => {
     const baseUrl = await startServer((_request, response) => {
       response.end(body);
     });
-    const client = new WorkerClient(baseUrl);
+    const client = new WorkerClient(baseUrl, workerOptions);
 
     await expect(client.openSession("scope_1")).rejects.toMatchObject({
       statusCode: 200,
@@ -501,11 +504,16 @@ describe("WorkerClient", () => {
     request,
   ) => {
     const baseUrl = await startServer((incoming, response) => {
+      if (incoming.url === "/sessions") {
+        sendJson(response, { session_id: "bsess_1" });
+        return;
+      }
       expect(incoming.url).toBe(expectedPath);
       sendJson(response, payload);
     });
-    const client = new WorkerClient(baseUrl);
+    const client = new WorkerClient(baseUrl, workerOptions);
 
+    await client.openSession("scope_1");
     await expect(request(client)).rejects.toMatchObject({
       statusCode: 200,
       code: "worker_error",
@@ -521,7 +529,7 @@ describe("WorkerClient", () => {
     ["maxResponseBytes", Number.NEGATIVE_INFINITY],
   ] as const)("rejects non-finite %s option %s", (option, value) => {
     expect(
-      () => new WorkerClient("http://worker.test", { [option]: value }),
+      () => new WorkerClient("http://worker.test", { ...workerOptions, [option]: value }),
     ).toThrow(RangeError);
   });
 
@@ -531,7 +539,7 @@ describe("WorkerClient", () => {
         session_id: `bsess_${"x".repeat(256)}`,
       });
     });
-    const client = new WorkerClient(baseUrl, { maxResponseBytes: 64 });
+    const client = new WorkerClient(baseUrl, { ...workerOptions, maxResponseBytes: 64 });
 
     await expect(client.openSession("scope_1")).rejects.toMatchObject({
       statusCode: 200,
@@ -547,7 +555,7 @@ describe("WorkerClient", () => {
         requestClosed = true;
       });
     });
-    const client = new WorkerClient(baseUrl);
+    const client = new WorkerClient(baseUrl, workerOptions);
     const controller = new AbortController();
 
     const request = client.openSession("scope_1", controller.signal);
@@ -559,7 +567,7 @@ describe("WorkerClient", () => {
 
   it("enforces its timeout through the same abort path", async () => {
     const baseUrl = await startServer(() => {});
-    const client = new WorkerClient(baseUrl, { timeoutMs: 20 });
+    const client = new WorkerClient(baseUrl, { ...workerOptions, timeoutMs: 20 });
 
     await expect(client.openSession("scope_1")).rejects.toMatchObject({
       statusCode: 0,
@@ -572,7 +580,7 @@ describe("WorkerClient", () => {
     const baseUrl = await startServer((_request, response) => {
       response.write('{"session_id":"bsess_');
     });
-    const client = new WorkerClient(baseUrl, { timeoutMs: 20 });
+    const client = new WorkerClient(baseUrl, { ...workerOptions, timeoutMs: 20 });
 
     await expect(client.openSession("scope_1")).rejects.toMatchObject({
       statusCode: 0,

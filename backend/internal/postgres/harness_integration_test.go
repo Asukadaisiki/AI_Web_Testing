@@ -42,7 +42,7 @@ func newHarnessTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store) 
 
 func seedRunForHarness(t *testing.T, ctx context.Context, store *Store) domain.Run {
 	t.Helper()
-	project, err := store.CreateProject(ctx, CreateProjectParams{Name: "harness"})
+	project, err := store.CreateProject(ctx, managedProjectParams(CreateProjectParams{Name: "harness"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -52,72 +52,32 @@ func seedRunForHarness(t *testing.T, ctx context.Context, store *Store) domain.R
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "run the harness",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "harness-" + t.Name(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 	return run
 }
 
-func TestPiBeginHarnessAttemptClaimsRunAndAllocatesAttempt(t *testing.T) {
-	ctx, pool, store := newHarnessTestStore(t)
-	run := seedRunForHarness(t, ctx, store)
-
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-1")
-	if err != nil {
-		t.Fatalf("begin harness attempt: %v", err)
-	}
-	if attempt.AttemptNumber != 1 {
-		t.Fatalf("attempt number = %d, want 1", attempt.AttemptNumber)
-	}
-	if attempt.Status != "active" {
-		t.Fatalf("attempt status = %q, want active", attempt.Status)
-	}
-	claimed, err := store.GetRun(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("get run: %v", err)
-	}
-	if claimed.Status != domain.RunRunning || claimed.StartedAt == nil {
-		t.Fatalf("claimed run = %#v, want running with started_at", claimed)
-	}
-
-	// A second delivery must reconcile the original attempt, never execute it again.
-	_, err = store.BeginHarnessAttempt(ctx, run.ID, "pi-att-2")
-	if !errors.Is(err, ErrRunAlreadyTerminal) {
-		t.Fatalf("second harness attempt: %v, want ErrRunAlreadyTerminal", err)
-	}
-	finished, err := store.GetRun(ctx, run.ID)
-	if err != nil || finished.Status != domain.RunFailed || finished.FinishedAt == nil {
-		t.Fatalf("reconciled run = %#v, %v, want terminal failed", finished, err)
-	}
-	var attempts int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM harness_attempts WHERE run_id = $1`, run.ID).Scan(&attempts); err != nil {
-		t.Fatal(err)
-	}
-	if attempts != 1 {
-		t.Fatalf("attempts = %d, want original attempt only", attempts)
-	}
-}
-
-func TestPiBeginHarnessAttemptRejectsTerminalRun(t *testing.T) {
+func TestPiManagedClaimRejectsTerminalRun(t *testing.T) {
 	ctx, _, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin harness attempt: %v", err)
 	}
-	if _, err := store.FinishHarnessAttempt(ctx, HarnessFinish{
+	if _, err := finishFixtureAttempt(t, ctx, store, HarnessFinish{
 		RunID: run.ID, AttemptID: attempt.ID, Status: domain.RunSucceeded,
 		Event: event.Envelope[json.RawMessage]{
 			SchemaVersion: "agenttrace.event.v1",
 			EventID:       "evt-terminal",
-			EventType:     "harness.completed",
+			EventType:     event.RunCompleted,
 			AggregateID:   run.ID,
 			CorrelationID: run.ID,
 			OccurredAt:    time.Now().UTC(),
@@ -127,43 +87,16 @@ func TestPiBeginHarnessAttemptRejectsTerminalRun(t *testing.T) {
 		t.Fatalf("finish run: %v", err)
 	}
 
-	_, err = store.BeginHarnessAttempt(ctx, run.ID, "pi-att-replay")
+	_, err = claimFixtureAttempt(t, ctx, store, run.ID, "pi-att-replay")
 	if !errors.Is(err, ErrRunAlreadyTerminal) {
 		t.Fatalf("begin on terminal run = %v, want ErrRunAlreadyTerminal", err)
-	}
-}
-
-func TestPiBeginHarnessAttemptRecoveryHonorsCancellation(t *testing.T) {
-	ctx, pool, store := newHarnessTestStore(t)
-	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-cancel-recovery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Begin may have changed cancelling to running; retain the durable flag.
-	if _, err := pool.Exec(ctx, `UPDATE runs SET cancel_requested_at = now() WHERE id = $1`, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-replay"); !errors.Is(err, ErrRunAlreadyTerminal) {
-		t.Fatalf("cancelled recovery: %v", err)
-	}
-	finished, err := store.GetRun(ctx, run.ID)
-	if err != nil || finished.Status != domain.RunCancelled || finished.FinishedAt == nil {
-		t.Fatalf("recovered cancellation = %#v, %v", finished, err)
-	}
-	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM harness_attempts WHERE id = $1`, attempt.ID).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if status != "cancelled" {
-		t.Fatalf("attempt status = %q, want cancelled", status)
 	}
 }
 
 func TestPiAppendHarnessEventValidatesSequenceAndReplay(t *testing.T) {
 	ctx, _, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
@@ -175,19 +108,19 @@ func TestPiAppendHarnessEventValidatesSequenceAndReplay(t *testing.T) {
 		SourceType:     "harness.started",
 		Event:          harnessEnvelope(run.ID, attempt.ID, 1, "harness.started", `{}`),
 	}
-	if err := store.AppendHarnessEvent(ctx, event1); err != nil {
+	if err := appendFixtureEvent(t, ctx, store, event1); err != nil {
 		t.Fatalf("append first event: %v", err)
 	}
 
 	// Exact replay is a no-op.
-	if err := store.AppendHarnessEvent(ctx, event1); err != nil {
+	if err := appendFixtureEvent(t, ctx, store, event1); err != nil {
 		t.Fatalf("replay first event = %v, want nil", err)
 	}
 
 	// Same source identity, different payload is a conflict.
 	conflict := event1
 	conflict.Event = harnessEnvelope(run.ID, attempt.ID, 1, "harness.started", `{"changed":true}`)
-	if !errors.Is(store.AppendHarnessEvent(ctx, conflict), ErrConflict) {
+	if !errors.Is(appendFixtureEvent(t, ctx, store, conflict), ErrConflict) {
 		t.Fatalf("conflict replay did not return ErrConflict")
 	}
 
@@ -199,7 +132,7 @@ func TestPiAppendHarnessEventValidatesSequenceAndReplay(t *testing.T) {
 		SourceType:     "pi.message.completed",
 		Event:          harnessEnvelope(run.ID, attempt.ID, 3, "pi.message.completed", `{}`),
 	}
-	if !errors.Is(store.AppendHarnessEvent(ctx, late), ErrConflict) {
+	if !errors.Is(appendFixtureEvent(t, ctx, store, late), ErrConflict) {
 		t.Fatalf("out-of-order sequence did not return ErrConflict")
 	}
 
@@ -211,7 +144,7 @@ func TestPiAppendHarnessEventValidatesSequenceAndReplay(t *testing.T) {
 		SourceType:     "pi.message.completed",
 		Event:          harnessEnvelope(run.ID, attempt.ID, 2, "pi.message.completed", `{"text":"hi"}`),
 	}
-	if err := store.AppendHarnessEvent(ctx, event2); err != nil {
+	if err := appendFixtureEvent(t, ctx, store, event2); err != nil {
 		t.Fatalf("append second event: %v", err)
 	}
 }
@@ -219,7 +152,7 @@ func TestPiAppendHarnessEventValidatesSequenceAndReplay(t *testing.T) {
 func TestPiAppendHarnessEventPersistsSpanAttemptUsageAndOperation(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
@@ -244,7 +177,7 @@ func TestPiAppendHarnessEventPersistsSpanAttemptUsageAndOperation(t *testing.T) 
 
 	insertRootSpan(t, ctx, pool, run.ID, "span-run")
 
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+	if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 1, SourceType: "pi.message.completed",
 		Event:     harnessEnvelope(run.ID, attempt.ID, 1, "pi.message.completed", `{"text":"hi"}`),
 		Span:      &span,
@@ -276,21 +209,21 @@ func TestPiAppendHarnessEventPersistsSpanAttemptUsageAndOperation(t *testing.T) 
 func TestPiFinishHarnessAttemptSetsTerminalStateAndRootSpan(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
 	now := time.Now().UTC()
 	insertRootSpan(t, ctx, pool, run.ID, "span-run")
 
-	if _, err := store.FinishHarnessAttempt(ctx, HarnessFinish{
+	if _, err := finishFixtureAttempt(t, ctx, store, HarnessFinish{
 		RunID: run.ID, AttemptID: attempt.ID, Status: domain.RunFailed,
 		Error:     json.RawMessage(`{"message":"boom"}`),
 		Assistant: "assistant text",
 		Event: event.Envelope[json.RawMessage]{
 			SchemaVersion: "agenttrace.event.v1",
 			EventID:       "evt-terminal-1",
-			EventType:     "harness.completed",
+			EventType:     event.RunCompleted,
 			AggregateID:   run.ID,
 			CorrelationID: run.ID,
 			OccurredAt:    now,
@@ -346,7 +279,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 	ctx, cancel := context.WithTimeout(baseCtx, 10*time.Second)
 	defer cancel()
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-cancel-race")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att-cancel-race")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
@@ -372,7 +305,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 		Event: event.Envelope[json.RawMessage]{
 			SchemaVersion: "agenttrace.event.v1",
 			EventID:       "evt-success-cancel-race",
-			EventType:     "harness.completed",
+			EventType:     event.RunCompleted,
 			AggregateID:   run.ID,
 			CorrelationID: run.ID,
 			OccurredAt:    time.Now().UTC(),
@@ -385,7 +318,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 	}
 	done := make(chan finishResult, 1)
 	go func() {
-		status, err := store.FinishHarnessAttempt(ctx, finish)
+		status, err := finishFixtureAttempt(t, ctx, store, finish)
 		done <- finishResult{status: status, err: err}
 	}()
 	// Wait for PostgreSQL to confirm that completion reached the locked run.
@@ -486,7 +419,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 		replay := finish
 		replay.Status = proposedStatus
 		replay.Error = json.RawMessage(`{"message":"late harness outcome"}`)
-		status, err := store.FinishHarnessAttempt(ctx, replay)
+		status, err := finishFixtureAttempt(t, ctx, store, replay)
 		if err != nil || status != "cancelled" {
 			t.Fatalf("replay with proposed %q = (%q, %v), want (cancelled, nil)", proposedStatus, status, err)
 		}
@@ -512,7 +445,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 	}
 	conflict := finish
 	conflict.Event.OccurredAt = conflict.Event.OccurredAt.Add(time.Second)
-	status, err := store.FinishHarnessAttempt(ctx, conflict)
+	status, err := finishFixtureAttempt(t, ctx, store, conflict)
 	if status != "cancelled" || !errors.Is(err, ErrConflict) {
 		t.Errorf("conflicting replay = (%q, %v), want (cancelled, ErrConflict)", status, err)
 	}
@@ -521,7 +454,7 @@ func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.
 func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	attempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
@@ -548,7 +481,7 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 	// Insert sequence 1 first, then sequence 2.
 	span1 := mkSpan("span-model-seq1", 1)
 	att1 := mkAttempt("att-model-seq1")
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+	if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 1,
 		SourceType: "pi.message.completed",
 		Event:      harnessEnvelope(run.ID, attempt.ID, 1, "pi.message.completed", `{"text":"first"}`),
@@ -558,7 +491,7 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 	}
 	span2 := mkSpan("span-model-seq2", 2)
 	att2 := mkAttempt("att-model-seq2")
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+	if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 2,
 		SourceType: "pi.message.completed",
 		Event:      harnessEnvelope(run.ID, attempt.ID, 2, "pi.message.completed", `{"text":"second"}`),
@@ -583,7 +516,7 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 		Status: "started", StartedAt: now,
 	}
 	toolAtt1 := TraceAttempt{ID: "att-tool-seq3", AttemptNumber: 1, Status: "started", StartedAt: now}
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+	if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 3,
 		SourceType: "pi.tool.started",
 		Event:      harnessEnvelope(run.ID, attempt.ID, 3, "pi.tool.started", `{"tool_call_id":"tc1"}`),
@@ -597,7 +530,7 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 		Status: "started", StartedAt: now,
 	}
 	toolAtt2 := TraceAttempt{ID: "att-tool-seq4", AttemptNumber: 1, Status: "started", StartedAt: now}
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+	if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 4,
 		SourceType: "pi.tool.started",
 		Event:      harnessEnvelope(run.ID, attempt.ID, 4, "pi.tool.started", `{"tool_call_id":"tc2"}`),
@@ -618,7 +551,7 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
-	harnessAttempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	harnessAttempt, err := claimFixtureAttempt(t, ctx, store, run.ID, "pi-att")
 	if err != nil {
 		t.Fatalf("begin attempt: %v", err)
 	}
@@ -640,7 +573,7 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 			ID: attemptID, AttemptNumber: 1, OperationID: operationID,
 			Status: "succeeded", StartedAt: now, EndedAt: &now,
 		}
-		if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+		if err := appendFixtureEvent(t, ctx, store, HarnessEventRecord{
 			RunID: run.ID, AttemptID: harnessAttemptID, SourceSequence: sequence,
 			SourceType: "pi.tool.completed",
 			Event: harnessEnvelope(
@@ -720,14 +653,6 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 		retryAttempt.ID, run.ID); err != nil {
 		t.Fatalf("seed historical attempt: %v", err)
 	}
-	appendCompletedTool(
-		retryAttempt.ID,
-		1,
-		"span-retry-click",
-		"attempt-retry-click",
-		"operation-retry-click",
-		"mcp__browser_harness__click",
-	)
 	missingCurrentFinish, err := store.LatestCompletedToolAttempt(
 		ctx, run.ID, retryAttempt.ID, finishTool, 2,
 	)
@@ -739,123 +664,6 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 			"retry lookup reused prior attempt finish = %#v, want empty",
 			missingCurrentFinish,
 		)
-	}
-}
-
-func TestPiCrashRedeliveryReconcilesWithoutOverwritingEvidence(t *testing.T) {
-	ctx, pool, store := newHarnessTestStore(t)
-	run := seedRunForHarness(t, ctx, store)
-
-	attempt1, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-1")
-	if err != nil {
-		t.Fatalf("begin attempt 1: %v", err)
-	}
-	now := time.Now().UTC()
-	insertRootSpan(t, ctx, pool, run.ID, "span-run")
-	// First attempt writes a model span.
-	span1 := domain.Span{
-		ID: "span-m1", RunID: run.ID, TraceID: "trace-1", SpanID: "span-m1",
-		ParentSpanID: "span-run", Kind: domain.SpanModel, Name: "message", Status: "succeeded",
-		StartedAt: now, EndedAt: &now,
-	}
-	att1 := TraceAttempt{ID: "att-m1", AttemptNumber: 1, Provider: "model", Status: "succeeded", StartedAt: now, EndedAt: &now}
-	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
-		RunID: run.ID, AttemptID: attempt1.ID, SourceSequence: 1, SourceType: "pi.message.completed",
-		Event: harnessEnvelope(run.ID, attempt1.ID, 1, "pi.message.completed", `{"text":"first"}`),
-		Span:  &span1, Attempt: &att1,
-	}); err != nil {
-		t.Fatalf("append attempt 1 event: %v", err)
-	}
-
-	// A failed terminal write leaves side effects and evidence behind.
-	if _, err := pool.Exec(ctx, `
-		CREATE FUNCTION reject_terminal_write() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN
-			IF NEW.status IN ('succeeded', 'failed', 'cancelled') THEN
-				RAISE EXCEPTION 'terminal persistence unavailable';
-			END IF;
-			RETURN NEW;
-		END $$;
-		CREATE TRIGGER reject_terminal_write BEFORE UPDATE ON runs
-		FOR EACH ROW EXECUTE FUNCTION reject_terminal_write()`); err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.FinishHarnessAttempt(ctx, HarnessFinish{
-		RunID: run.ID, AttemptID: attempt1.ID, Status: domain.RunSucceeded,
-		Event: harnessEnvelope(run.ID, attempt1.ID, 2, event.RunCompleted, `{}`),
-	})
-	if err == nil {
-		t.Fatal("expected terminal persistence failure")
-	}
-	// Recovery itself can fail; no new attempt may be allocated in that case.
-	restarted := NewStore(pool)
-	if _, err := restarted.BeginHarnessAttempt(ctx, run.ID, "pi-att-recovery-failed"); err == nil || errors.Is(err, ErrRunAlreadyTerminal) {
-		t.Fatalf("failed reconciliation = %v, want retryable persistence error", err)
-	}
-	if _, err := pool.Exec(ctx, `DROP TRIGGER reject_terminal_write ON runs`); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if _, err := restarted.BeginHarnessAttempt(ctx, run.ID, "pi-att-redelivery"); !errors.Is(err, ErrRunAlreadyTerminal) {
-			t.Fatalf("restart redelivery = %v, want terminal without new attempt", err)
-		}
-	}
-
-	var modelSpans int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM spans WHERE run_id = $1 AND kind = 'model'`, run.ID).Scan(&modelSpans); err != nil {
-		t.Fatalf("count model spans: %v", err)
-	}
-	if modelSpans != 1 {
-		t.Fatalf("model spans = %d, want 1 (prior evidence preserved, no replay)", modelSpans)
-	}
-
-	var attempt1Events, attempts, terminalEvents int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE harness_attempt_id = $1`, attempt1.ID).Scan(&attempt1Events); err != nil {
-		t.Fatalf("count attempt 1 events: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM harness_attempts WHERE run_id = $1`, run.ID).Scan(&attempts); err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`, run.ID).Scan(&terminalEvents); err != nil {
-		t.Fatal(err)
-	}
-	if attempt1Events != 1 || attempts != 1 || terminalEvents != 1 {
-		t.Fatalf("evidence / attempts / terminal events = %d / %d / %d, want 1 each", attempt1Events, attempts, terminalEvents)
-	}
-	var status, rootStatus string
-	var finishedAt *time.Time
-	var runError json.RawMessage
-	if err := pool.QueryRow(ctx, `SELECT status, finished_at FROM harness_attempts WHERE id = $1`, attempt1.ID).Scan(&status, &finishedAt); err != nil {
-		t.Fatal(err)
-	}
-	if status != "failed" || finishedAt == nil {
-		t.Fatalf("original attempt = %s / %v, want terminal failed", status, finishedAt)
-	}
-	if err := pool.QueryRow(ctx, `SELECT status FROM spans WHERE run_id = $1 AND kind = 'run'`, run.ID).Scan(&rootStatus); err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.QueryRow(ctx, `SELECT error FROM runs WHERE id = $1`, run.ID).Scan(&runError); err != nil {
-		t.Fatal(err)
-	}
-	if rootStatus != "failed" || !strings.Contains(string(runError), "needs_reconciliation") {
-		t.Fatalf("root / error = %s / %s, want failed reconciliation", rootStatus, runError)
-	}
-	var terminal, outbox json.RawMessage
-	if err := pool.QueryRow(ctx, `SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'run.completed'`, run.ID).Scan(&terminal); err != nil {
-		t.Fatal(err)
-	}
-	var envelope event.Envelope[event.RunCompletion]
-	if err := json.Unmarshal(terminal, &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if envelope.Payload.Status != domain.RunFailed || !envelope.OccurredAt.Equal(attempt1.StartedAt) {
-		t.Fatalf("recovery completion = %s, want failed with stable occurrence time", terminal)
-	}
-	if err := pool.QueryRow(ctx, `SELECT payload FROM outbox_events WHERE event_id = $1`, envelope.EventID).Scan(&outbox); err != nil {
-		t.Fatal(err)
-	}
-	if string(outbox) != string(terminal) {
-		t.Fatal("recovery completion not durably queued for UI")
 	}
 }
 

@@ -1,3 +1,4 @@
+import { genericExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { access, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ import { SessionCleanupError } from "../src/server.js";
 import { BrowserEvidenceGuard } from "../src/browser/evidence-guard.js";
 
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1", run_id: "http-run", attempt_id: "http-attempt",
   goal: "Verify the page", model: { provider: "scripted", name: "test", reasoning_effort: "off" },
 };
@@ -28,7 +30,8 @@ describe("attempt-local real MCP HTTP bridge", () => {
 
   async function resources(env: Record<string, string> = {}, name = "browser-harness"): Promise<HarnessResources> {
     const result = await prepareHarnessResources({
-      ...request, worker_url: "http://127.0.0.1:8080", artifact_scope: "http-run/http-attempt",
+      ...request, ...environmentLease,
+      worker_url: "http://127.0.0.1:8080", artifact_scope: "http-run/http-attempt",
       execution: { runtime_id: "claude-code", harness: {
         id: "test", name: "Test", revision: 1, system_prompt: "Use tools", skills: [],
         mcp: { [name]: { capability: name === "browser-harness" ? "browser-harness" : "fixture",
@@ -414,9 +417,8 @@ describe("attempt-local real MCP HTTP bridge", () => {
   });
 
   it("starts no HTTP service for an empty generic harness", async () => {
-    const resource = await resources();
-    resource.servers = [];
-    delete resource.definition.cleanup;
+    const resource = await prepareHarnessResources(request);
+    disposals.push(resource.dispose);
     const written: HarnessEvent[] = [];
     const bridge = await openRuntimeMcp(resource, new HarnessEventWriter(request, {
       write(chunk) { written.push(JSON.parse(String(chunk))); return true; },

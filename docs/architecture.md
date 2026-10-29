@@ -1,159 +1,120 @@
 # Architecture
 
-AgentTrace Eval Hub v3 is one durable browser-evaluation workflow. The React
-workspace presents projects, conversations, and run traces in three columns.
-The API stores requests in PostgreSQL and appends outbox rows atomically. Kafka
-delivers commands to the runtime, which owns one long-lived **session host**
-subprocess. Each execution attempt selects an independent Pi, Claude Code or
-Codex SDK session. PostgreSQL manages Harness records containing system prompt,
-skills and MCP servers, copied into immutable Run snapshots. The default
-browser Harness exposes attempt-scoped MCP tools backed by
-deterministic TypeScript logic and the Playwright worker. The worker evaluates the local fixture site and
-returns evidence that becomes durable run events and trace details. The Go
-runtime consumes the harness's newline-delimited event stream and writes Trace
-records and terminal Run status to PostgreSQL.
+The only product path is Langfuse UI/BFF -> authenticated Go Control API ->
+project Registry snapshots -> fenced Runtime/Browser Workers. PostgreSQL
+preserves facts; Kafka preserves delivery; Redis preserves live experience.
+The optional exporter projects actual canonical traces into Langfuse without
+being on the execution critical path.
 
-PostgreSQL preserves facts; Kafka preserves delivery; Redis preserves live experience.
-
-## Canonical browser scenario
-
-`integration/local/acceptance.py` creates an isolated project and executes the
-real `glm-5.3-flash` model against native services. It checks a minimal browser
-case and its fresh-context dry run, a failed assertion and active cancellation.
-It verifies PostgreSQL evidence, Kafka delivery, Redis notifications, ordered
-SSE replay and real Langfuse traces. `integration/v3` retains deterministic
-container scenarios as an additional execution path.
-
-The retained browser-case interoperability contract remains
-`fixtures/contract/case_contract.json`. It is consumed by the worker contract
-tests; it is not a second control-plane architecture.
-
-## Runtime topology
+## Managed Topology
 
 ```mermaid
 flowchart LR
-    UI[React three-column workspace] --> API[AgentTrace API]
-    API --> PG[(PostgreSQL facts)]
-    API --> OUTBOX[PostgreSQL outbox]
-    OUTBOX --> KAFKA[(Kafka delivery)]
-    KAFKA --> RUNTIME[AgentTrace runtime]
+    UI[Langfuse UI and project RBAC] --> BFF[Server-only authenticated BFF]
+    BFF --> API[Scoped Go Control API]
+    API --> PG[(PostgreSQL Registry facts and leases)]
+    PG --> OUTBOX[Transactional outbox]
+    OUTBOX --> KAFKA[(Kafka commands events lifecycle DLQ)]
+    KAFKA --> RUNTIME[Fenced Runtime]
     RUNTIME --> HOST[Shared session host]
-    HOST --> SELECT[Runtime Strategy]
-    SELECT --> PI[Pi SDK Adapter]
-    SELECT --> CLAUDE[Claude Agent SDK Adapter]
-    SELECT --> CODEX[Codex SDK Adapter]
-    HARNESS[Immutable Harness snapshot] --> HOST
-    PG --> HARNESS
-    PI --> MCP[Attempt-scoped MCP tools]
-    CLAUDE --> MCP
-    CODEX --> MCP
-    MCP --> CASEBUILDER[Deterministic case builder]
-    MCP --> WORKER[Playwright worker]
-    WORKER --> FIXTURE[Local storefront fixture]
-    WORKER --> MCP
-    HOST -. Routed JSONL events .-> RUNTIME
+    HOST --> SDK[Explicit Pi Claude Code or Codex SDK]
+    PG --> SNAPSHOT[Immutable project Harness snapshot]
+    SNAPSHOT --> HOST
+    SDK --> MCP[Reviewed attempt-scoped MCP]
+    MCP --> WORKER[Authenticated browser provider]
+    WORKER --> PROFILE[Encrypted Conversation Environment]
+    WORKER --> SITE[Reviewed allowed domains]
+    HOST --> RUNTIME
     RUNTIME --> PG
-    KAFKA --> NOTIFIER[Independent live notifier]
-    NOTIFIER --> REDIS[(Redis wakeups)]
+    KAFKA --> LIVE[Independent notifier]
+    LIVE --> REDIS[(Disposable wakeups)]
     REDIS --> API
     PG --> API
-    API --> UI
-    KAFKA -. completed events .-> EXPORTER[Optional async Langfuse exporter]
-    EXPORTER -. ingestion .-> LANGFUSE[Langfuse]
+    KAFKA --> EXPORTER[Optional exporter]
+    EXPORTER --> UI
 ```
 
-PostgreSQL owns projects, conversations, messages, runs, events, traces,
-operations, idempotency, and pending outbox rows. Kafka topics carry immutable
-command and event envelopes and have a dedicated DLQ. Redis is not a source of
-truth: when unavailable, the API's SSE stream uses `postgres_poll`. Langfuse
-is jointly started in native acceptance and asynchronously observes completed work; it is not
-on the request or runtime critical path.
+Every request carries server-authenticated Go/LF project, actor and role scope.
+The BFF selects Conversations dynamically; the trusted seed establishes a
+project binding, not fixed product routing. Global mutable catalog/project
+creation and agent/model-only submissions are absent.
 
-## Replaceable execution boundaries
+## Admission And Execution
 
-The Go transport owns process supervision and routes normalized events by
-`run_id + attempt_id`. The Node host owns session lifetimes through an
-`ExecutionSessionFactory`; it does not import the Pi SDK. The Pi adapter owns
-the SDK's model loop and translates an SDK-free Harness snapshot into
-resources and MCP registrations. Claude Code and Codex have independent lazy
-SDK adapters behind the same session contract. The browser Harness owns browser-specific
-authoring, evidence and completion policy. Langfuse consumes persisted traces
-through its separate exporter and does not select tools or own sessions.
+Message creation accepts content, explicit runtime and immutable Harness
+version, plus idempotency key. One transaction resolves project capabilities,
+pins the full snapshot and requires an owned ready Environment before queuing
+new work. Existing managed hashes and replay-before-readiness behavior remain.
+Each Conversation owns one encrypted browser Environment. Current Lease,
+generation and fencing identity gate execution and evidence writes.
+Uncertain expired execution is quarantined as lost/needs_review; no automatic
+external-effect replay or identity reset follows.
 
-`GET /api/v1/runtimes` exposes public model identities and local readiness.
-Harness CRUD uses `/api/v1/harnesses`; message submission selects `runtime_id`
-and `harness_id`. The API selects the public model from server configuration.
-PostgreSQL atomically stores the entire snapshot in the Run and queued command.
-Harness updates increment revisions; deletion does not invalidate existing
-Runs. Restart does not overwrite edited or deleted catalog seeds.
+The Go transport supervises one long-lived Node host per Runtime process and
+routes normalized `pi-browser-harness.v1`/`pi.*` JSONL by Run and Attempt.
+The host accepts shared `run`, `cancel`, `shutdown` commands, requires an
+explicit supported SDK and validated snapshot, and has no disk-Skill,
+startup-module or default-Pi execution fallback.
 
-Each Attempt materializes private temporary skills and MCP environment
-references. Pi registers selected stdio servers directly. Claude Code and Codex
-use an Attempt-owned loopback MCP adapter retaining the stdio connection,
-forwarding actual tool results and keeping cleanup tools hidden from models.
-Its listener and children close after SDK work and browser release are joined.
-Pi awaits the public transport `onClose` acknowledgement, including transports
-replaced during reconnects. Claude and Codex supervise their direct SDK child
-and await process close before releasing MCP. A missing shutdown acknowledgement
-raises `SessionCleanupError` and retains Attempt files instead of reporting a
-successful release. SDK process groups receive termination signals; arbitrary
-detached descendants are not independently joined.
+Official Pi, Claude Agent SDK query and Codex startThread/runStreamed adapters
+share the session contract. Reviewed capabilities are SDK-free; changing
+Runtime does not require another Harness. Selected MCP transports and private
+Attempt resources are released only after SDK/browser cleanup is joined.
+The concurrency slot stays held through `harness.released`.
+Missing shutdown acknowledgement retains files and fails cleanup.
+A host failure may affect sibling sessions; independently detached descendants
+have no separate join acknowledgement. First evidence-write failure cancels
+the affected session instead of continuing unrecorded side effects.
 
-Codex defaults to the native Responses protocol. Providers that ignore selected
-MCP namespace declarations can explicitly use
-`AGENTTRACE_CODEX_TOOL_FORMAT=flat-functions`. An Attempt-owned loopback adapter
-translates declarations and function-call names at the provider boundary. The
-official SDK and native CLI still execute actual MCP tools; arguments, tool
-results, model text and usage are preserved. The listener closes after SDK exit
-and before MCP release. This compatibility option adds no deployed service.
+Codex defaults to native Responses; explicit `flat-functions` adapts namespace
+declarations at the provider boundary without replacing actual SDK/MCP results
+or usage. No additional deployed service is introduced.
+The selected Harness supplies its required settled verdict; durable cancel
+overrides it. Assistant prose or missing verdict cannot create success.
 
-`AGENTTRACE_HARNESS_MODULE` retains trusted startup-module compatibility for
-legacy requests without an execution snapshot. Another host
-implementation can use the same JSONL protocol through the configured command
-and entrypoint. The `pi.*` event names and `pi-browser-harness.v1` identifier are
-retained wire compatibility names.
+## Browser And Evidence
 
-Production starts the host with `--server`, sends `run`, `cancel`, and
-`shutdown` commands, and waits for `harness.ready`. Every attempt has its own
-strict event decoder and sequence. `harness.settled` includes the selected
-Harness's required `succeeded` or `failed` verdict. Durable cancellation
-overrides the policy. Generic request fields are Run/Attempt identity, goal and
-public model reference; browser fields and evidence are separate extensions.
+Browser session open/replay requires internal auth, complete strict body
+project/Environment/generation/fencing identity and a held browser handle.
+Provider affinity preserves identity placement. Profile state and fencing
+high-water marks are encrypted; reset/delete require acknowledged managed
+lifecycle transitions. Independent local profile directories are not
+horizontal shared identity storage.
 
-The runtime holds the concurrency slot until `harness.released`, emitted after
-awaited session shutdown and MCP cleanup. A normal cancellation targets one
-session. A process crash, invalid stream or cancellation that exceeds its
-termination grace fails all active sessions in that host and reaps its process
-group. A later submission starts a new host; the transport does not replay
-external operations automatically.
+Browser-case-authoring and deterministic case building retain actual tool
+results, fresh-context dry runs and screenshot evidence. The interoperability
+contract stays at `fixtures/contract/case_contract.json`. It is not another
+control plane. Model-supplied grounding metadata is structurally validated,
+not independent proof of prior-observation provenance.
+Controlled takeover is one-time, scoped and audited; worker tokens/handles
+never become public capabilities. Authenticated root `/artifacts` access is
+retained for Management and the BFF.
 
-First evidence-write failure stops the affected session and awaits cleanup.
-Generic persistence projects lifecycle, models and tools; a separate browser
-projection handles operation and Case evidence. No unused Redis lease or cancel
-hint remains. A shared `run.completed` event carries Run ID, status and optional
-error to both durable readers and exporter. Model trace data preserves SDK
-granularity: Pi supplies captured model inputs and call intervals; Claude
-supplies assistant messages and cumulative query/model usage; Codex supplies
-completed-turn text, usage and host-measured turn intervals. Missing per-call
-inputs, timings and billed costs remain unknown.
-Claude query/model totals have distinct identities per SDK result, provider
-and model and attach to the Run root. Langfuse exports those totals as Trace
-and root metadata, preserving the distinction from individual GENERATION
-usage. Actual MCP tool content, structured results and error flags are retained
-in canonical tool evidence across all three adapters.
+SSE always replays ordered persisted event sequences; Redis only wakes readers.
+Canonical completion is `run.completed`; aliases are retired, historical rows
+and applied additive migrations retained. Pi can report captured inputs/call
+intervals; Claude query totals belong to the Run root, not individual model
+generations; Codex reports turn usage and host timing. Unknown inputs, timing
+or billed cost are not fabricated.
 
-## Failed-Run rerun lineage
+## Rerun And Deployment
 
-A Run records its originating user message in `source_message_id`. A user rerun
-is a new Run with the same `source_message_id` and an immediate parent recorded
-in `retry_of_run_id`; it copies the failed Run's immutable specification,
-receives a new Run ID, and starts at checkpoint zero. The source Run and all of
-its durable evidence remain unchanged. The new execution persists its own
-spans, usage, operation results, events, and artifacts with identities that do
-not overlap the source.
+Explicit failed-Run rerun preserves source message, immediate parent and
+immutable snapshot while assigning fresh Run/evidence identities and current
+ready Environment generation. Publish/revoke cannot mutate earlier Runs.
+Historical nonexecutable snapshots remain readable, not silently substituted.
+Kafka/DLQ redelivery retries durable delivery, not a new user Run.
 
-This is a user-requested execution, not Kafka/DLQ delivery recovery. Kafka
-redelivery and DLQ handling retry durable transport or consumer work without
-creating a Run. A user rerun is eligible only when its direct source Run is
-`failed`, uses an idempotency key scoped to that source, and may repeat the
-original external effects.
+The native launcher always bootstraps Management before fixture/Worker/API/
+Runtime and optional Exporter, and uses existing private Langfuse. Four Kafka
+topics require at least eight partitions; native default concurrency is four.
+Existing undersized topics require reviewed operator upgrade; metadata/offsets
+are never reset by startup. Dockerfiles are component builds, not orchestration.
+See [setup](management-runtime-setup.md) and [operations](operations.md).
+
+Current managed acceptance covers SDK/browser, immutable Registry/rerun,
+identity/control/reset/delete, scoped PG/SSE and optional real export.
+Finite fault/load and owned isolated infrastructure acceptance remain separate.
+Retirement does not establish identical legacy coverage; detailed limits are
+in setup and the parent-owned cleanup report. Dated historical reports retain
+their original results, not current deployed source/build parity claims.

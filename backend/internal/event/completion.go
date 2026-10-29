@@ -19,12 +19,10 @@ type RunCompletion struct {
 }
 
 func IsRunCompletion(kind string) bool {
-	return kind == RunCompleted || kind == "runtime.completed" || kind == "harness.completed"
+	return kind == RunCompleted
 }
 
-// DecodeRunCompletion accepts legacy events only to drain already queued v1
-// deliveries. Remove these aliases after their outbox and consumer backlog drain.
-// New producers must emit RunCompleted with an explicit run_id.
+// DecodeRunCompletion requires canonical completion identity and terminal status.
 func DecodeRunCompletion(kind, aggregateID string, raw json.RawMessage) (RunCompletion, error) {
 	var completion RunCompletion
 	if !IsRunCompletion(kind) {
@@ -32,18 +30,6 @@ func DecodeRunCompletion(kind, aggregateID string, raw json.RawMessage) (RunComp
 	}
 	if err := json.Unmarshal(raw, &completion); err != nil {
 		return completion, errors.New("decode run completion payload")
-	}
-	if kind == "runtime.completed" && completion.RunID == "" {
-		var legacy struct {
-			RunID string
-		}
-		if err := json.Unmarshal(raw, &legacy); err != nil {
-			return completion, errors.New("decode legacy run completion payload")
-		}
-		completion.RunID = legacy.RunID
-	}
-	if kind == "harness.completed" && completion.RunID == "" {
-		completion.RunID = aggregateID
 	}
 	if strings.TrimSpace(aggregateID) == "" || completion.RunID != aggregateID {
 		return completion, errors.New("run completion payload does not match aggregate")

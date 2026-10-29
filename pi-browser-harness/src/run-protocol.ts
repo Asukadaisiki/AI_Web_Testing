@@ -19,7 +19,7 @@ export interface RunRequest {
   model: ModelRequest;
   worker_url?: string;
   artifact_scope?: string;
-  execution?: ExecutionSpec;
+  execution: ExecutionSpec;
   project_id?: string;
   environment_id?: string;
   profile_generation?: number;
@@ -160,6 +160,7 @@ export function parseRunRequest(input: string): RunRequest {
   if (!isNonBlankString(value.goal)) {
     throw new Error("goal must be non-blank");
   }
+  value.execution = parseExecutionSpec(value.execution);
   if (Object.hasOwn(value, "artifact_scope") && !isNonBlankString(value.artifact_scope)) {
     throw new Error("artifact_scope must be non-blank");
   }
@@ -167,7 +168,9 @@ export function parseRunRequest(input: string): RunRequest {
     throw new Error("worker_url must be an absolute HTTP URL");
   }
   const leaseKeys = ["project_id", "environment_id", "profile_generation", "fencing_token"];
-  if (leaseKeys.some((key) => Object.hasOwn(value, key))) {
+  const hasBrowser = Object.values((value.execution as ExecutionSpec).harness.mcp)
+    .some((server) => server.capability === "browser-harness");
+  if (hasBrowser || leaseKeys.some((key) => Object.hasOwn(value, key))) {
     if (!isNonBlankString(value.project_id) || !isNonBlankString(value.environment_id) ||
       !Number.isSafeInteger(value.profile_generation) || (value.profile_generation as number) < 1 ||
       !Number.isSafeInteger(value.fencing_token) || (value.fencing_token as number) < 1) {
@@ -188,10 +191,6 @@ export function parseRunRequest(input: string): RunRequest {
   if (!isNonBlankString(model.reasoning_effort)) {
     throw new Error("model.reasoning_effort must be non-blank");
   }
-  if (Object.hasOwn(value, "execution")) {
-    value.execution = parseExecutionSpec(value.execution);
-  }
-
   return value as unknown as RunRequest;
 }
 

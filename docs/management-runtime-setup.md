@@ -2,7 +2,8 @@
 
 This is the runnable seed, native process launcher and API acceptance contract
 for the Phase 0-4 management design. Langfuse is the sole product UI.
-Management mode is opt-in and requires an authenticated server-side bridge.
+Management is mandatory and requires an authenticated server-side bridge.
+Deprecated management flags cannot select another stack.
 These instructions do not authorize stopping any existing process.
 
 ## Prerequisites
@@ -30,7 +31,6 @@ variables first, then `.env`, then native defaults. Docker addresses in an
 existing `.env` must be replaced with valid native addresses.
 
 ```dotenv
-AGENTTRACE_MANAGEMENT_ENABLED=true
 AGENTTRACE_HTTP_ADDR=127.0.0.1:8181
 AGENTTRACE_API_URL=http://127.0.0.1:8181
 AGENTTRACE_WORKER_URL=http://127.0.0.1:8111
@@ -147,12 +147,20 @@ python3 integration/local/run.py --with-exporter
 ```
 
 `--skip-build` reuses an already-built SDK host. The launcher creates Kafka
-run topics plus `agenttrace.environment.commands.v1` in management mode,
+run command/event/DLQ topics plus `agenttrace.environment.commands.v1`,
 runs the trusted seed before application processes, and uses its canonical
 IDs for child configuration. It starts fixture, worker, API, runtime and the
 optional exporter, using configured addresses and checking their ports
-before launching. It does not start the old `web` console in management
-mode and does not start or replace Langfuse.
+before launching. It never starts a separate console and does not start or
+replace Langfuse. Bridge/provider tokens, matching worker token and an existing
+LF project binding are required before state creation or build/data/service
+side effects. Explicit API and HTTP addresses must agree.
+
+Kafka topics target eight partitions. Existing metadata and offsets are retained.
+The launcher describes every topic after create-if-absent and refuses an
+existing topic with fewer than eight partitions (or unreadable partition count).
+It never automatically alters partitions: an operator must review key ordering,
+consumers and topology before upgrading an undersized topic.
 
 `--with-exporter` requires LF base URL/public/secret keys. Configure the
 adapted Langfuse BFF with the same private bridge token and returned Go/LF
@@ -160,6 +168,19 @@ binding using its server environment. Current BFF project routing must use
 the canonical Conversation selected by the UI, not a fixed startup
 Conversation. Without the exporter, LF trace/session correlation is not
 verified merely because management APIs work.
+
+The launcher changes only its child environment, not the parent shell.
+For a private canonical-ID handoff, run the trusted seed CLI with the same
+deployment environment, redirect its JSON result to an operator-owned 0600
+file outside the checkout, and use returned `project_id`/`langfuse_project_id`
+to configure BFF and later acceptance. Repeated seed reuses the binding; optional
+project/Conversation inputs are seed reuse, not fixed product routing.
+The BFF supports `AGENTTRACE_PROJECT_BINDINGS` JSON for explicit LF-to-Go
+project mappings. It does not require a startup Conversation ID.
+An explicitly nonempty `AGENTTRACE_EXPORT_PROJECT_ID` selects single-project
+export; native seed replaces it with the canonical Go project in children.
+Unset/empty retains all-project export, so use credentials appropriate to that
+deployment scope.
 
 Shutdown handles only children launched by this runner. An occupied port
 causes refusal; it is never a reason to kill an unrelated listener.
@@ -199,6 +220,16 @@ digests, explicit negative/rerun lineage, active cancellation, one-time
 takeover replay refusal, real screenshot/input/close, generation advance,
 and acknowledged delete tombstones. Publishing/revoking newer Skill/Harness
 versions must not mutate earlier Run snapshots or rerun snapshots.
+
+Successful SDK cases also compare project-scoped PostgreSQL trace counts,
+single durable completion and drained Run outbox, then perform two authenticated
+SSE reads with Last-Event-ID reconnect against canonical ordered events.
+When private LF keys are supplied, they check real terminal export correlation,
+available model inputs and per-span generation usage. This is not identical to
+the retired suite: Redis TTL/stream assertions, explicit command/inbox counts,
+fixed-model timing/name/current-goal comparisons and generic Harness composition
+are not all ported. Missing SDK per-call data stays unknown. Parent-run final
+smoke separately checks password absence and real Langfuse UI/RBAC.
 
 Drain selects an idle project-dedicated worker and restores its previous
 setting. Shared deployment worker drain is skipped unless the operator
@@ -353,6 +384,17 @@ Offline launcher/scenario tests:
 
 ```bash
 python3 -m unittest discover -s integration/local -p '*_test.py'
+node --test integration/local/langfuse.test.mjs
+```
+
+Use Node 24 for the Langfuse launcher tests. `support_test.py` is included in
+Python discovery and checks the extracted environment/PG/SSE/poll/cleanup
+adapters. It supplies no unauthenticated HTTP or legacy run creation.
+
+Operator/source contracts, from `backend`:
+
+```bash
+go test . -run '^Test(OperatorFilesDescribePortableManagedStartup|NativeManagedStartupEnablesParallelRuntimeDelivery|RetiredProductPathsAreAbsent|RetiredV2PathsAreAbsent)$' -count=1
 ```
 
 Focused Go tests, from `backend`:

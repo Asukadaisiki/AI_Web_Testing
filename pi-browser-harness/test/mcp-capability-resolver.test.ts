@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { prepareHarnessResources } from "../src/harness-resources.js";
 import type { RunRequest } from "../src/run-protocol.js";
 import type { McpCapabilitySnapshot } from "../src/execution-spec.js";
+import { environmentLease } from "./fixtures/selected-harness.js";
 
 const request = (server: McpCapabilitySnapshot): RunRequest => ({
   protocol_version: "pi-browser-harness.v1", run_id: "run", attempt_id: "attempt",
@@ -79,7 +80,7 @@ it("does not resolve from host env or disclose resolver exceptions", async () =>
 });
 
 it("does not allow a deployed mapping to override the builtin browser capability", async () => {
-  const input = request({ capability: "browser-harness", config: {}, secret_refs: {} });
+  const input = { ...request({ capability: "browser-harness", config: {}, secret_refs: {} }), ...environmentLease };
   input.worker_url = "https://worker.test";
   input.artifact_scope = "run/attempt";
   const resources = await prepareHarnessResources(input, {

@@ -17,7 +17,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from acceptance import load_environment, pg_environment
+from support import load_environment, pg_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 DATABASE = "agenttrace_test_infrastructurefault_20261028"
@@ -101,7 +101,8 @@ def source_hashes():
     paths = list((ROOT / "backend/internal").rglob("*.go"))
     paths += list((ROOT / "backend/internal/postgres/migrations").glob("*.sql"))
     paths += [ROOT / "backend/go.mod", ROOT / "backend/go.sum",
-              Path(__file__), Path(__file__).with_name("infrastructure_faults_test.py")]
+              Path(__file__), Path(__file__).with_name("infrastructure_faults_test.py"),
+              Path(__file__).with_name("support.py")]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(paths) if not path.name.endswith("_test.go") or
             "infrastructurefaults" in path.parts}

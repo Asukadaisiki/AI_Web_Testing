@@ -129,7 +129,7 @@ func TestApplicationCompletionExportsEveryTerminalOutcomeAndDeduplicates(t *test
 	}
 }
 
-func TestLegacyHarnessCompletionWithoutRunIDIsExported(t *testing.T) {
+func TestLegacyHarnessCompletionIsIgnored(t *testing.T) {
 	client := &recordingClient{}
 	exporter := newTestExporter(canonicalRepository(), client)
 	message := completionMessage(t, "old-harness-completion")
@@ -143,8 +143,8 @@ func TestLegacyHarnessCompletionWithoutRunIDIsExported(t *testing.T) {
 	if err := exporter.Handle(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.batches) != 1 {
-		t.Fatal("legacy queued harness completion was ignored")
+	if len(client.batches) != 0 {
+		t.Fatal("removed completion alias was exported")
 	}
 }
 

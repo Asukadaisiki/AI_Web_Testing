@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/browserprovider"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/serviceprobe"
@@ -29,19 +27,14 @@ const (
 
 // Repository is the canonical PostgreSQL boundary used by HTTP handlers.
 type Repository interface {
-	ListProjects(context.Context) ([]postgres.Project, error)
-	CreateProject(context.Context, postgres.CreateProjectParams) (postgres.Project, error)
-	DeleteProject(context.Context, string) error
 	ListConversations(context.Context, string) ([]postgres.Conversation, error)
 	CreateConversation(context.Context, postgres.CreateConversationParams) (postgres.Conversation, error)
-	DeleteConversation(context.Context, string) error
 	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, []domain.Run, error)
 	CreateMessageAndRun(context.Context, postgres.CreateMessageParams) (domain.Message, domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
 	CreateRerun(context.Context, postgres.CreateRerunParams) (domain.Run, error)
 	GetTraceDetails(context.Context, string) (postgres.TraceDetails, error)
 	RequestCancel(context.Context, string) error
-	SubmitResponse(context.Context, postgres.SubmitResponseParams) error
 	PendingOutbox(context.Context) (int, error)
 }
 
@@ -59,30 +52,22 @@ type healthDependencies = HealthDependencies
 
 // ServerConfig supplies the server-owned dependencies for the API process.
 type ServerConfig struct {
-	Repository           Repository
-	Profile              agentprofile.Profile
-	Model                event.ModelRef
-	Runtimes             []execution.Runtime
-	Stream               *stream.Service
-	Health               HealthDependencies
-	ArtifactDir          string
-	BridgeToken          string
-	BridgeProjectID      string
-	BridgeConversationID string
-	ManagementEnabled    bool
-	BrowserProvider      *browserprovider.Client
-	HeartbeatInterval    time.Duration
-	SSEWriteTimeout      time.Duration
+	Repository        Repository
+	Runtimes          []execution.Runtime
+	Stream            *stream.Service
+	Health            HealthDependencies
+	ArtifactDir       string
+	BridgeToken       string
+	BridgeProjectID   string
+	BrowserProvider   *browserprovider.Client
+	HeartbeatInterval time.Duration
+	SSEWriteTimeout   time.Duration
 }
 
 // Server is an HTTP handler for the one-workspace AgentTrace API.
 type Server struct {
 	repository      Repository
-	profile         agentprofile.Profile
-	model           event.ModelRef
 	runtimes        []execution.Runtime
-	harnesses       HarnessRepository
-	management      bool
 	browserProvider *browserprovider.Client
 	stream          *stream.Service
 	health          HealthDependencies
@@ -102,33 +87,16 @@ func New(config ServerConfig) *Server {
 	if writeWait <= 0 {
 		writeWait = defaultSSEWriteWait
 	}
-	model := config.Model
-	if model.Provider == "" {
-		model.Provider = config.Profile.Model.Provider
-	}
-	if model.Name == "" {
-		model.Name = config.Profile.Model.Name
-	}
-	if model.ReasoningEffort == "" {
-		model.ReasoningEffort = config.Profile.Model.ReasoningEffort
-	}
 	server := &Server{
 		repository:      config.Repository,
-		profile:         config.Profile,
-		model:           model,
 		runtimes:        append([]execution.Runtime(nil), config.Runtimes...),
 		stream:          config.Stream,
 		health:          config.Health,
 		heartbeat:       heartbeat,
 		writeWait:       writeWait,
-		management:      config.ManagementEnabled,
 		browserProvider: config.BrowserProvider,
 	}
-	server.harnesses, _ = config.Repository.(HarnessRepository)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/projects", server.handleListProjects)
-	mux.HandleFunc("POST /api/v1/projects", server.handleCreateProject)
-	mux.HandleFunc("DELETE /api/v1/projects/{id}", server.handleDeleteProject)
 	mux.HandleFunc("GET /api/v1/projects/{id}/conversations", server.handleListConversations)
 	mux.HandleFunc("POST /api/v1/projects/{id}/conversations", server.handleCreateConversation)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", server.handleGetConversation)
@@ -139,28 +107,13 @@ func New(config ServerConfig) *Server {
 	mux.HandleFunc("GET /api/v1/runs/{id}/trace", server.handleGetTrace)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", server.handleEvents)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", server.handleCancel)
-	mux.HandleFunc("POST /api/v1/runs/{id}/responses", server.handleResponse)
-	mux.HandleFunc("GET /api/v1/agents", server.handleAgents)
 	mux.HandleFunc("GET /api/v1/runtimes", server.handleRuntimes)
-	mux.HandleFunc("GET /api/v1/harnesses", server.handleListHarnesses)
-	mux.HandleFunc("GET /api/v1/harnesses/{id}", server.handleGetHarness)
-	mux.HandleFunc("POST /api/v1/harnesses", server.handleCreateHarness)
-	mux.HandleFunc("PUT /api/v1/harnesses/{id}", server.handleUpdateHarness)
-	mux.HandleFunc("DELETE /api/v1/harnesses/{id}", server.handleDeleteHarness)
 	mux.HandleFunc("GET /api/v1/health", server.handleHealth)
-	if config.ManagementEnabled {
-		server.registerRegistryRoutes(mux)
-		server.registerEnvironmentRoutes(mux)
-		server.registerControlSessionRoutes(mux)
-		server.registerWorkerRoutes(mux)
-	}
-	if config.ArtifactDir != "" {
-		mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(config.ArtifactDir))))
-	}
-	server.handler = mux
-	if config.ManagementEnabled || config.BridgeToken != "" || config.BridgeProjectID != "" || config.BridgeConversationID != "" {
-		server.handler = server.bridgeGuard(mux, config, config.ManagementEnabled)
-	}
+	server.registerRegistryRoutes(mux)
+	server.registerEnvironmentRoutes(mux)
+	server.registerControlSessionRoutes(mux)
+	server.registerWorkerRoutes(mux)
+	server.handler = server.bridgeGuard(mux, config)
 	return server
 }
 

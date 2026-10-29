@@ -63,34 +63,30 @@ func run() error {
 	defer bus.Close()
 
 	store := postgres.NewStore(pool)
-	store.SetManagementEnabled(cfg.ManagementEnabled)
-	workerID := ""
-	if cfg.ManagementEnabled {
-		runtimeNode, browserNode, err := configuredWorkers(cfg)
-		if err != nil {
-			return fmt.Errorf("configure workers: %w", err)
-		}
-		if _, err := store.RegisterWorker(ctx, runtimeNode); err != nil {
-			return fmt.Errorf("register runtime worker: %w", err)
-		}
-		if err := probeBrowserWorker(ctx, browserNode.Endpoint); err != nil {
-			return fmt.Errorf("browser worker readiness: %w", err)
-		}
-		if _, err := store.RegisterWorker(ctx, browserNode); err != nil {
-			return fmt.Errorf("register browser worker: %w", err)
-		}
-		workerID = runtimeNode.ID
-		workerCtx, cancelWorkers := context.WithCancel(ctx)
-		workerDone := make(chan struct{})
-		go func() {
-			defer close(workerDone)
-			maintainWorkers(workerCtx, store, runtimeNode.ID, browserNode)
-		}()
-		defer func() {
-			cancelWorkers()
-			<-workerDone
-		}()
+	runtimeNode, browserNode, err := configuredWorkers(cfg)
+	if err != nil {
+		return fmt.Errorf("configure workers: %w", err)
 	}
+	if _, err := store.RegisterWorker(ctx, runtimeNode); err != nil {
+		return fmt.Errorf("register runtime worker: %w", err)
+	}
+	if err := probeBrowserWorker(ctx, browserNode.Endpoint); err != nil {
+		return fmt.Errorf("browser worker readiness: %w", err)
+	}
+	if _, err := store.RegisterWorker(ctx, browserNode); err != nil {
+		return fmt.Errorf("register browser worker: %w", err)
+	}
+	workerID := runtimeNode.ID
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		maintainWorkers(workerCtx, store, runtimeNode.ID, browserNode)
+	}()
+	defer func() {
+		cancelWorkers()
+		<-workerDone
+	}()
 	runner := newCommandRunner(cfg, store, workerID)
 	defer func() {
 		if err := runner.Close(); err != nil {
@@ -106,12 +102,10 @@ func run() error {
 		RetryStore: runtime.PostgresRetryStore{Store: store, Consumer: "agenttrace-runtime"},
 		DLQTopic:   cfg.Kafka.DLQTopic,
 	}
-	if cfg.ManagementEnabled {
-		consumerRuntime.Ready = func(ctx context.Context) (bool, error) {
-			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-			return store.WorkerReady(probeCtx, workerID)
-		}
+	consumerRuntime.Ready = func(ctx context.Context) (bool, error) {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return store.WorkerReady(probeCtx, workerID)
 	}
 	if err := consumeWorkers(ctx, cfg.RuntimeConcurrency, func(workerCtx context.Context) error {
 		return consumeWhenReady(workerCtx, consumerRuntime.Ready, func(ctx context.Context) error {
@@ -131,11 +125,7 @@ type managedCommandRunner interface {
 // newCommandRunner bounds session concurrency and owns one shared host
 // transport. Model execution and the selected Harness live behind that
 // transport; Langfuse observes persisted events independently.
-func newCommandRunner(cfg config.Config, store *postgres.Store, workerIDs ...string) managedCommandRunner {
-	workerID := ""
-	if len(workerIDs) > 0 {
-		workerID = workerIDs[0]
-	}
+func newCommandRunner(cfg config.Config, store *postgres.Store, workerID string) managedCommandRunner {
 	hostEnvironment := harnessEnvironment(cfg.Harness)
 	if cfg.BrowserProviderToken != "" {
 		hostEnvironment = append(hostEnvironment, "AGENTTRACE_BROWSER_PROVIDER_TOKEN="+cfg.BrowserProviderToken)
@@ -153,7 +143,6 @@ func newCommandRunner(cfg config.Config, store *postgres.Store, workerIDs ...str
 	piRunner := runtime.PiRunner{
 		Process:                process,
 		Store:                  runtime.PostgresPiTraceStore{Store: store, RuntimeWorkerID: workerID},
-		WorkerURL:              cfg.WorkerURL,
 		DefaultReasoningEffort: runtimeReasoningEffort(cfg.Model),
 	}
 	bounded, err := newBoundedRunner(piRunner, cfg.RuntimeConcurrency)
@@ -165,7 +154,7 @@ func newCommandRunner(cfg config.Config, store *postgres.Store, workerIDs ...str
 }
 
 func configuredWorkers(cfg config.Config) (postgres.WorkerRegistration, postgres.WorkerRegistration, error) {
-	if cfg.ManagementEnabled && strings.TrimSpace(cfg.BrowserProviderToken) == "" {
+	if strings.TrimSpace(cfg.BrowserProviderToken) == "" {
 		return postgres.WorkerRegistration{}, postgres.WorkerRegistration{}, errors.New("management runtime requires AGENTTRACE_BROWSER_PROVIDER_TOKEN")
 	}
 	capacity := 1

@@ -1,3 +1,4 @@
+import { genericExecution } from "./fixtures/selected-harness.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSession, ModelRuntime, type AgentSession, type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { createBrowserHarnessDefinition } from "../src/browser-harness.js";
 import type { HarnessDefinition, HarnessMcpServer } from "../src/harness-definition.js";
@@ -15,6 +15,7 @@ import { HarnessEventWriter, type HarnessEvent, type RunRequest } from "../src/r
 
 const fixture = fileURLToPath(new URL("./fixtures/runtime-mcp-server.mjs", import.meta.url));
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1", run_id: "pi-mcp", attempt_id: "pi-mcp-attempt",
   goal: "complete the request",
   model: { provider: "scripted", name: "offline-fixture", reasoning_effort: "off" },
@@ -154,31 +155,23 @@ it("continues supplementary cleanup after the custom Harness hook rejects", asyn
   });
 });
 
-it("preserves injected legacy tool definitions and their custom cleanup result shape", async () => {
-  let releases = 0;
-  const lifecycle: string[] = [];
+it("deduplicates reviewed MCP release calls and preserves the real CallToolResult envelope", async () => {
   await withSession({
-    ...generic,
+    ...generic, mcpServers: [server("selected")],
     cleanup: async ({ callMcpTool }) => {
-      expect(await callMcpTool("mcp__legacy__release", {})).toEqual({ closed: true });
-      expect(await callMcpTool("mcp__legacy__release", {})).toEqual({ closed: true });
-      lifecycle.push("acknowledged");
+      for (let i = 0; i < 2; i++) {
+        expect(await callMcpTool("mcp__selected__release", {})).toMatchObject({
+          content: [], structuredContent: { closed: true },
+        });
+      }
     },
-  }, async (session) => {
+  }, async (session, _sdk, cwd) => {
     await session.close();
-    expect(releases).toBe(1);
-    expect(lifecycle).toEqual(["acknowledged", "shutdown"]);
-  }, [(pi) => {
-    pi.registerTool({
-      name: "mcp__legacy__release", label: "Release", description: "Legacy release",
-      parameters: Type.Object({}), exposure: "hidden",
-      async execute() {
-        releases++;
-        return { content: [], details: {}, structuredContent: { closed: true } };
-      },
-    });
-    pi.on("session_shutdown", () => { lifecycle.push("shutdown"); });
-  }]);
+    const lifecycle = await log(cwd);
+    expect(lifecycle.match(/call:release/g)).toHaveLength(1);
+    expect(lifecycle).toContain("acknowledged");
+    expect(lifecycle.indexOf("acknowledged")).toBeLessThan(lifecycle.indexOf("disconnected"));
+  });
 });
 
 it("retains real generic MCP content and structured data in completed tool evidence", async () => {

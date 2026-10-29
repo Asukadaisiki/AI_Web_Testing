@@ -41,7 +41,7 @@ func TestRetiredV2PathsAreAbsent(t *testing.T) {
 	}
 }
 
-func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
+func TestOperatorFilesDescribePortableManagedStartup(t *testing.T) {
 	root := filepath.Clean("..")
 	read := func(path string) string {
 		t.Helper()
@@ -66,11 +66,29 @@ func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
 		t.Error(".env.example must configure the Pi harness entry point")
 	}
 
-	compose := read("compose.yaml")
-	if strings.Contains(compose, "goproxy.cn") {
-		t.Error("Compose must not force a region-specific Go proxy")
+	hostDockerfile := read("pi-browser-harness/Dockerfile")
+	if strings.Contains(hostDockerfile, "goproxy.cn") {
+		t.Error("host build must not force a region-specific Go proxy")
+	}
+	for _, entry := range []string{"AGENTTRACE_PI_HARNESS_ENTRY=", "AGENTTRACE_BUILTIN_HARNESS_DIR=", "AGENTTRACE_BUILTIN_MCP_ENTRY=", `CMD ["go", "run", "./cmd/agenttrace-runtime"]`} {
+		if !strings.Contains(hostDockerfile, entry) {
+			t.Errorf("host image must configure managed runtime entry/resource: %s", entry)
+		}
 	}
 	dockerfile := read("worker/Dockerfile")
+	if !strings.Contains(dockerfile, `CMD ["uv", "run", "--no-sync", "uvicorn", "loop_worker.main:app"`) {
+		t.Error("worker image must define its explicit service command")
+	}
+	for _, retired := range []string{"AGENTTRACE_MANAGEMENT_ENABLED=", "AGENTTRACE_HARNESS_MODULE=", "AGENTTRACE_LOCAL_WEB_PORT="} {
+		if strings.Contains(envExample, retired) {
+			t.Errorf("active environment example configures retired mode: %s", retired)
+		}
+	}
+	for _, required := range []string{"AGENTTRACE_BRIDGE_TOKEN=", "AGENTTRACE_BROWSER_PROVIDER_TOKEN=", "AGENTTRACE_LANGFUSE_PROJECT_ID=", "AGENTTRACE_REDIS_DB=3"} {
+		if !strings.Contains(envExample, required) {
+			t.Errorf("native managed example must include %s", required)
+		}
+	}
 	if strings.Contains(dockerfile, "mirrors.tuna.tsinghua.edu.cn") {
 		t.Error("worker build must not force a region-specific Debian mirror")
 	}
@@ -111,22 +129,28 @@ func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
 	}
 }
 
-func TestComposeEnablesParallelRuntimeDelivery(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "compose.yaml"))
+func TestNativeManagedStartupEnablesParallelRuntimeDelivery(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "integration/local/run.py"))
 	if err != nil {
-		t.Fatalf("read compose.yaml: %v", err)
+		t.Fatalf("read native launcher: %v", err)
 	}
-	compose := string(content)
-	if !strings.Contains(compose, `AGENTTRACE_KAFKA_PARTITIONS: "8"`) {
-		t.Error("Compose Kafka topics must target eight partitions for high-concurrency workspace runs")
+	launcher := string(content)
+	for _, required := range []string{`"--partitions", "8"`, "PartitionCount:", "configure_kafka_topic(topic, env)", `"agenttrace.environment.commands.v1"`, `"AGENTTRACE_RUNTIME_CONCURRENCY": "4"`, "seed_management(env)"} {
+		if !strings.Contains(launcher, required) {
+			t.Errorf("native startup lacks managed delivery contract: %s", required)
+		}
 	}
-	if !strings.Contains(compose, "kafka_init_topics.sh") {
-		t.Error("Compose must run the partition-upgrading Kafka topic initializer")
+	if strings.Contains(launcher, "management_enabled") || strings.Contains(launcher, `ROOT / "web"`) {
+		t.Error("native startup must have one mandatory managed plan")
 	}
-	if !strings.Contains(
-		compose,
-		"AGENTTRACE_RUNTIME_CONCURRENCY: ${AGENTTRACE_RUNTIME_CONCURRENCY:-4}",
-	) {
-		t.Error("Compose runtime must default to four concurrent command workers")
+}
+
+func TestRetiredProductPathsAreAbsent(t *testing.T) {
+	for _, path := range []string{"web", "compose.yaml", "integration/v3", "run_v3_tests.py", "run_v3_tests_test.py",
+		"integration/local/acceptance.py", "integration/local/composition.py", "integration/local/composition_test.py",
+		"integration/local/faults.py", "integration/local/worker_audit.py"} {
+		if _, err := os.Stat(filepath.Join("..", path)); !os.IsNotExist(err) {
+			t.Errorf("retired product path still exists: %s", path)
+		}
 	}
 }

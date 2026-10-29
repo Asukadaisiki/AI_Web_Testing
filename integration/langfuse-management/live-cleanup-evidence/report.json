@@ -1,0 +1,7 @@
+{
+  "status": "failed",
+  "stage": "import_before_browser_launch",
+  "error_type": "ModuleNotFoundError",
+  "reason": "System Python does not contain Playwright.",
+  "superseded_by": "../live-cleanup-evidence-retry1/report.json"
+}

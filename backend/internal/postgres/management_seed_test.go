@@ -61,7 +61,7 @@ func seedTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
-	store.SetManagementEnabled(true)
+
 	if err := store.SetEnvironmentDefaultPolicy([]string{"127.0.0.1", "localhost"}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,19 +138,15 @@ func seedCounts(t *testing.T, s *Store) []byte {
 func TestManagementSeedConvertsLegacyWithoutLosingHistory(t *testing.T) {
 	s := seedTestStore(t)
 	ctx := context.Background()
-	s.SetManagementEnabled(false)
-	project, err := s.CreateProject(ctx, CreateProjectParams{Name: "legacy"})
-	if err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO projects(id,name) VALUES('legacy-project','legacy');
+		INSERT INTO conversations(id,project_id,title) VALUES('legacy-conversation','legacy-project','original title')`); err != nil {
 		t.Fatal(err)
 	}
-	conv, err := s.CreateConversation(ctx, CreateConversationParams{ProjectID: project.ID, Title: "original title"})
-	if err != nil {
+	project := Project{ID: "legacy-project"}
+	conv := Conversation{ID: "legacy-conversation", ProjectID: project.ID, Title: "original title"}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO messages(id,conversation_id,ordinal,role,content) VALUES('legacy-msg',$1,1,'user','keep history')`, conv.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.pool.Exec(ctx, `INSERT INTO messages(id,conversation_id,ordinal,role,content) VALUES('legacy-msg',$1,1,'user','keep history')`, conv.ID); err != nil {
-		t.Fatal(err)
-	}
-	s.SetManagementEnabled(true)
 	p := ManagementSeedParams{LangfuseProjectID: "lf-legacy", ProjectID: project.ID, ConversationID: conv.ID, ActorID: "seed", Builtin: seedBuiltin(t)}
 	result, err := s.SeedManagement(ctx, p)
 	if err != nil {

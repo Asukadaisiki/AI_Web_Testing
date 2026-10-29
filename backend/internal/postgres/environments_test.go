@@ -44,8 +44,6 @@ func managementTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store) 
 		}
 	}
 	store := NewStore(pool)
-	store.SetManagementEnabled(true)
-	t.Cleanup(func() { store.SetManagementEnabled(false) })
 	return ctx, pool, store
 }
 
@@ -138,7 +136,7 @@ func TestManagementLifecycleAcknowledgementResetAndTombstone(t *testing.T) {
 	ctx, pool, store := managementTestStore(t)
 	conversation := boundConversation(t, ctx, store)
 	environment, _ := store.GetConversationEnvironment(ctx, conversation.ID)
-	if err := store.DeleteConversation(ctx, conversation.ID); !errors.Is(err, ErrConflict) {
+	if err := store.DeleteConversationAs(ctx, conversation.ID, "actor"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("delete while provisioning=%v", err)
 	}
 	acknowledgeEnvironment(t, ctx, pool, store, environment.ID, "provision")
@@ -157,7 +155,7 @@ func TestManagementLifecycleAcknowledgementResetAndTombstone(t *testing.T) {
 		t.Fatalf("double reset=%v", err)
 	}
 	acknowledgeEnvironment(t, ctx, pool, store, environment.ID, "reset")
-	if err := store.DeleteConversation(ctx, conversation.ID); err != nil {
+	if err := store.DeleteConversationAs(ctx, conversation.ID, "actor"); err != nil {
 		t.Fatal(err)
 	}
 	deleting, _, _, _ := store.GetConversation(ctx, conversation.ID)
@@ -203,7 +201,7 @@ func TestManagementDeleteAndResetGuardRunLeaseAndInbox(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := store.DeleteConversation(ctx, conversation.ID); !errors.Is(err, ErrConflict) {
+			if err := store.DeleteConversationAs(ctx, conversation.ID, "actor"); !errors.Is(err, ErrConflict) {
 				t.Fatalf("%s delete=%v", blocker, err)
 			}
 			if _, err := store.ResetEnvironment(ctx, environment.ID, "actor"); !errors.Is(err, ErrConflict) {
@@ -285,7 +283,7 @@ func TestEnvironmentConcurrentAcknowledgementIsIdempotent(t *testing.T) {
 				}
 			}
 			if kind == "delete" {
-				if err := store.DeleteConversation(ctx, conversation.ID); err != nil {
+				if err := store.DeleteConversationAs(ctx, conversation.ID, "actor"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -365,7 +363,7 @@ func TestEnvironmentCompletionRejectsMutatedClaimAndStaleToken(t *testing.T) {
 	}
 }
 
-func TestManagementReadinessGateAndLegacyOptOut(t *testing.T) {
+func TestManagementReadinessGateAndHistoricalReadOnlyConversation(t *testing.T) {
 	ctx, pool, store := managementTestStore(t)
 	conversation := boundConversation(t, ctx, store)
 	environment, _ := store.GetConversationEnvironment(ctx, conversation.ID)
@@ -385,20 +383,20 @@ func TestManagementReadinessGateAndLegacyOptOut(t *testing.T) {
 		t.Fatalf("archived gate=%v", err)
 	}
 	baseline := NewStore(pool)
-	if baseline.ManagementEnabled() {
-		t.Fatal("management must default false")
-	}
-	project, err := baseline.CreateProject(ctx, CreateProjectParams{Name: "Legacy"})
-	if err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO projects(id,name) VALUES('legacy-project','Legacy');
+		INSERT INTO conversations(id,project_id,title) VALUES('legacy-conversation','legacy-project','Historical')`); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := baseline.CreateConversation(ctx, CreateConversationParams{ProjectID: project.ID})
-	if err != nil {
-		t.Fatal(err)
+	legacy, _, _, err := baseline.GetConversation(ctx, "legacy-conversation")
+	if err != nil || legacy.Title != "Historical" {
+		t.Fatalf("historical read: %+v %v", legacy, err)
+	}
+	if _, err := baseline.CheckConversationRunnable(ctx, legacy.ID); err == nil {
+		t.Fatal("unbound historical conversation executable")
 	}
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM environments WHERE conversation_id = $1`, legacy.ID).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("legacy environment count=%d err=%v", count, err)
+		t.Fatalf("historical read manufactured environment count=%d err=%v", count, err)
 	}
 }
 
@@ -412,7 +410,7 @@ func TestEnvironmentCrashRecoveryLoadsCanonicalDurableClaim(t *testing.T) {
 		t.Fatalf("claim=%v err=%v", acquired, err)
 	}
 	restarted := NewStore(pool)
-	restarted.SetManagementEnabled(true)
+
 	recovered, err := restarted.GetEnvironmentCommandClaim(ctx, envelope.EventID)
 	if err != nil || recovered.Token != original.Token || recovered.Command.EnvironmentID != environment.ID {
 		t.Fatalf("recovery=%+v err=%v", recovered, err)
@@ -435,7 +433,7 @@ func TestManagementGuardsPersistentLeaseEvenIfEnvironmentProjectionIsReady(t *te
 	if _, err := pool.Exec(ctx, `INSERT INTO environment_leases VALUES ($1, 'active')`, environment.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteConversation(ctx, conversation.ID); !errors.Is(err, ErrConflict) {
+	if err := store.DeleteConversationAs(ctx, conversation.ID, "actor"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("live lease delete=%v", err)
 	}
 	if _, err := store.ResetEnvironment(ctx, environment.ID, "actor"); !errors.Is(err, ErrConflict) {
@@ -453,7 +451,7 @@ func TestManagementConversationDeletionPreservesOtherEnvironment(t *testing.T) {
 	firstEnvironment, _ := store.GetConversationEnvironment(ctx, first.ID)
 	secondEnvironment, _ := store.GetConversationEnvironment(ctx, second.ID)
 	acknowledgeEnvironment(t, ctx, pool, store, firstEnvironment.ID, "provision")
-	if err := store.DeleteConversation(ctx, first.ID); err != nil {
+	if err := store.DeleteConversationAs(ctx, first.ID, "actor"); err != nil {
 		t.Fatal(err)
 	}
 	acknowledgeEnvironment(t, ctx, pool, store, firstEnvironment.ID, "delete")

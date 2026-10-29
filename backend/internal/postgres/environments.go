@@ -17,17 +17,6 @@ import (
 const EnvironmentCommandsTopic = "agenttrace.environment.commands.v1"
 const EnvironmentCommandConsumer = "agenttrace-environments"
 
-// Set the flag once at startup; do not change it while requests are in flight.
-func (s *Store) SetManagementEnabled(enabled bool) {
-	if s != nil {
-		s.managementEnabled.Store(enabled)
-	}
-}
-
-func (s *Store) ManagementEnabled() bool {
-	return s != nil && s.managementEnabled.Load()
-}
-
 // This is deployment policy, supplied once at startup. Metadata and uploaded
 // Harness content cannot grant additional browser domains.
 func (s *Store) SetEnvironmentDefaultPolicy(domains []string) error {
@@ -113,9 +102,6 @@ type EnvironmentProvider interface {
 func (s *Store) requireManagement() error {
 	if s == nil || s.pool == nil {
 		return errors.New("postgres store is not configured")
-	}
-	if !s.ManagementEnabled() {
-		return ErrConflict
 	}
 	return nil
 }

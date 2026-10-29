@@ -17,7 +17,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	if !s.requireRepository(w) {
 		return
 	}
-	if identity, ok := BridgeIdentityFromContext(r.Context()); ok && identity.ProjectID != r.PathValue("id") {
+	if identity, ok := BridgeIdentityFromContext(r.Context()); !ok || identity.ProjectID != r.PathValue("id") {
 		writeBridgeForbidden(w)
 		return
 	}
@@ -37,7 +37,7 @@ func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	identity, trusted := BridgeIdentityFromContext(r.Context())
-	if trusted && (identity.ProjectID != r.PathValue("id") || identity.Role == "viewer") {
+	if !trusted || identity.ProjectID != r.PathValue("id") || identity.Role == "viewer" {
 		writeBridgeForbidden(w)
 		return
 	}
@@ -108,17 +108,14 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusAccepted, map[string]string{"conversation_id": r.PathValue("id"), "state": "deleting"})
 		return
 	}
-	if err := s.repository.DeleteConversation(r.Context(), r.PathValue("id")); err != nil {
-		writeRepositoryError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	writeBridgeForbidden(w)
 }
 
 func (s *Server) requireConversationOwner(w http.ResponseWriter, r *http.Request, id string) bool {
 	identity, trusted := BridgeIdentityFromContext(r.Context())
 	if !trusted {
-		return true // The fixed bridge already checks its configured ownership.
+		writeBridgeForbidden(w)
+		return false
 	}
 	if !s.requireRepository(w) {
 		return false

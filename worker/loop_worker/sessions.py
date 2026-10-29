@@ -159,15 +159,6 @@ class SessionManager:
 
     # ---- 会话表 ----
 
-    async def create(self, session_id: str) -> WorkerSession:
-        """开一个浏览器会话，并把它绑到领域会话上（决定证据落哪个目录）。"""
-        if not session_id:
-            raise ValueError("session_id is required to open a browser session")
-        browser = await self.browser()
-        context = await browser.new_context(viewport={"width": 1280, "height": 800})
-        page = await context.new_page()
-        return self.register(session_id, context, page)
-
     def register(self, session_id, context, page) -> WorkerSession:
         # 兜底超时：不让任何漏传 timeout 的 Playwright 调用吃默认的 30s
         page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)
@@ -184,10 +175,7 @@ class SessionManager:
 
     async def close(self, session_id: str) -> bool:
         session = self.get(session_id)
-        if session.environment_id:
-            await self.environments.close(session)
-        else:
-            await session.close()
+        await self.environments.close(session)
         self._sessions.pop(session_id, None)
         # Dispose known resources, but do not acknowledge release of a leaked dry run.
         self.require_ready()
@@ -198,8 +186,7 @@ class SessionManager:
     async def navigate(self, session_id: str, url: str) -> Observation:
         self.require_ready()
         session = self.get(session_id)
-        if session.environment_id:
-            self.environments.check_navigation(session, url)
+        self.environments.check_navigation(session, url)
         await goto(session.page, url, DEFAULT_STEP_TIMEOUT_MS)
         return await self.observe(session)
 
@@ -238,7 +225,6 @@ class SessionManager:
                 page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS,
                 upload_root=scoped_upload_root(
                     f"{session.environment_id}_g{session.profile_generation}"
-                    if session.environment_id else session.session_id
                 ),
             )
         elif request.action in ("assert_element", "assert_attribute", "assert_count"):

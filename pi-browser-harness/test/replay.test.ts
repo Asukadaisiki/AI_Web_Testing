@@ -1,3 +1,4 @@
+import { workerOptions } from "./fixtures/selected-harness.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -115,7 +116,7 @@ async function makeBuilder(
   overrides: Partial<CaseBuilderDeps> = {},
 ): Promise<CaseBuilder> {
   return CaseBuilder.create({
-    worker: new WorkerClient(workerUrl),
+    worker: new WorkerClient(workerUrl, workerOptions),
     artifactScope: "sess_replay",
     goal: "find a product",
     ...overrides,

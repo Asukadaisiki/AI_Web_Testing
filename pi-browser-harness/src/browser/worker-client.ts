@@ -57,21 +57,20 @@ export class WorkerClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-    this.environmentLease = options.environmentLease ? { ...options.environmentLease } : undefined;
-    this.headers = {};
-    if (options.providerToken) this.headers.authorization = `Bearer ${options.providerToken}`;
-    if (this.environmentLease) {
-      const lease = this.environmentLease;
-      if (!lease.project_id?.trim() || !lease.environment_id?.trim() ||
-        !Number.isSafeInteger(lease.profile_generation) || lease.profile_generation < 1 ||
-        !Number.isSafeInteger(lease.fencing_token) || lease.fencing_token < 1 || !options.providerToken?.trim()) {
-        throw new TypeError("managed browser requires complete lease metadata and host provider token");
-      }
-      this.headers["x-project-id"] = lease.project_id;
-      this.headers["x-environment-id"] = lease.environment_id;
-      this.headers["x-profile-generation"] = String(lease.profile_generation);
-      this.headers["x-fencing-token"] = String(lease.fencing_token);
+    const lease = options.environmentLease;
+    if (!lease?.project_id?.trim() || !lease.environment_id?.trim() ||
+      !Number.isSafeInteger(lease.profile_generation) || lease.profile_generation < 1 ||
+      !Number.isSafeInteger(lease.fencing_token) || lease.fencing_token < 1 || !options.providerToken?.trim()) {
+      throw new TypeError("managed browser requires complete lease metadata and host provider token");
     }
+    this.environmentLease = { ...lease };
+    this.headers = {
+      authorization: `Bearer ${options.providerToken}`,
+      "x-project-id": lease.project_id,
+      "x-environment-id": lease.environment_id,
+      "x-profile-generation": String(lease.profile_generation),
+      "x-fencing-token": String(lease.fencing_token),
+    };
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new RangeError("timeoutMs must be a positive integer");
     }
@@ -137,15 +136,15 @@ export class WorkerClient {
     artifact: Case,
     signal?: AbortSignal,
   ): Promise<ExecutionResult> {
-    if (this.environmentLease && !this.browserSessionId) {
+    if (!this.browserSessionId) {
       throw new TypeError("managed dryrun requires a held browser session");
     }
     const payload = await this.request(
       "POST",
       "/execute",
-      { session_id: artifactScope, case: artifact, ...(this.environmentLease ? {
+      { session_id: artifactScope, case: artifact,
         ...this.environmentLease, browser_session_id: this.browserSessionId,
-      } : {}) },
+      },
       signal,
     );
     return decodeSuccess(payload, parseExecutionResult);

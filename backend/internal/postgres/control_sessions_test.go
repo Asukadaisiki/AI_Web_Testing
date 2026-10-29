@@ -44,7 +44,7 @@ func controlTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Store, Env
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
-	store.SetManagementEnabled(true)
+
 	conversation := boundConversation(t, ctx, store)
 	environment, err := store.GetConversationEnvironment(ctx, conversation.ID)
 	if err != nil {

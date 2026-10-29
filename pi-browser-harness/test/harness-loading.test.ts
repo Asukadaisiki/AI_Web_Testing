@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../src/main.js";
 import type { HarnessEvent } from "../src/run-protocol.js";
 import type { HarnessControl } from "../src/server.js";
+import { genericExecution } from "./fixtures/selected-harness.js";
 
 // A replacement must boot even when the browser implementation/resources are unavailable.
 vi.mock("../src/browser-harness.js", () => { throw new Error("browser resources are unavailable"); });
@@ -11,8 +12,6 @@ vi.mock("../src/browser/contract.js", () => { throw new Error("browser contracts
 afterEach(() => vi.unstubAllEnvs());
 
 it("boots a replacement harness without loading the browser implementation", async () => {
-  vi.stubEnv("AGENTTRACE_HARNESS_MODULE",
-    new URL("./fixtures/lightweight-harness.mjs", import.meta.url).pathname);
   const input = new Readable({ read() {} });
   const events: (HarnessEvent | HarnessControl)[] = [];
   const output = new Writable({
@@ -30,6 +29,7 @@ it("boots a replacement harness without loading the browser implementation", asy
       protocol_version: "pi-browser-harness.v1", run_id: "replacement", attempt_id: "attempt",
       goal: "answer",
       model: { provider: "scripted", name: "replacement", reasoning_effort: "off" },
+      execution: genericExecution,
     },
   })}\n`);
   expect(await running).toBe(0);

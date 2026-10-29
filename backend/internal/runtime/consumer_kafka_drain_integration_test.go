@@ -15,6 +15,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/registry"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -47,7 +48,12 @@ func TestKafkaDrainHandsQueuedDeliveryToSecondWorker(t *testing.T) {
 	store := postgres.NewStore(pool)
 	active := kafkaDrainFixture(t, ctx, pool, store, "active")
 	queued := kafkaDrainFixture(t, ctx, pool, store, "queued")
-	store.SetManagementEnabled(true)
+
+	var workers int
+	piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT count(*) FROM worker_nodes`), &workers)
+	if workers != 0 {
+		t.Fatalf("drain fixtures pre-registered %d workers", workers)
+	}
 	for _, w := range []postgres.WorkerRegistration{
 		{ID: "runtime-a", Role: "runtime", Capacity: 1, HeartbeatTTL: time.Minute},
 		{ID: "runtime-b", Role: "runtime", Capacity: 2, HeartbeatTTL: time.Minute},
@@ -65,6 +71,7 @@ func TestKafkaDrainHandsQueuedDeliveryToSecondWorker(t *testing.T) {
 	bus := kafkaDrainBus(t, ctx, brokers)
 	defer bus.Close()
 	group := "agenttrace-test-leases-" + rand.Text()
+	t.Logf("private Kafka topic=%s group=%s", bus.topic, group)
 
 	releaseActive, activeStarted := make(chan struct{}), make(chan struct{})
 	activeDone := make(chan error, 1)
@@ -174,7 +181,7 @@ func TestKafkaDrainHandsQueuedDeliveryToSecondWorker(t *testing.T) {
 
 func kafkaDrainFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *postgres.Store, suffix string) event.RunCommand {
 	t.Helper()
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: suffix})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: suffix}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,19 +189,25 @@ func kafkaDrainFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
-		ConversationID: conversation.ID, Content: suffix, AgentID: "test",
-		Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: suffix})
+	environment, err := store.GetConversationEnvironment(ctx, conversation.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := "env-" + suffix
-	if _, err := pool.Exec(ctx, `INSERT INTO environments(id,project_id,conversation_id,state) VALUES($1,$2,$3,'ready')`, env, project.ID, conversation.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE environments SET state='ready' WHERE id=$1`, environment.ID); err != nil {
 		t.Fatal(err)
 	}
-	command := commandFor(run.ID)
-	command.ProjectID, command.ConversationID, command.EnvironmentID, command.ProfileGeneration = project.ID, conversation.ID, env, 1
-	return command
+	harness, err := store.PublishProjectHarness(ctx, project.ID, "", registry.HarnessVersion{Name: suffix, RuntimeIDs: []string{"pi"}}, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID, Content: suffix,
+		Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: suffix,
+		RuntimeID: "pi", HarnessVersionID: harness.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return managedFixtureCommand(t, ctx, PostgresPiTraceStore{Store: store}, event.RunCommand{RunID: run.ID})
 }
 
 type drainHarnessProcess struct {
@@ -271,9 +284,12 @@ func kafkaDrainBus(t *testing.T, ctx context.Context, brokers string) *isolatedL
 		req := kmsg.NewPtrDeleteTopicsRequest()
 		req.TopicNames = []string{topic}
 		req.Topics = []kmsg.DeleteTopicsRequestTopic{{Topic: &topic}}
-		if _, err := req.RequestWith(cleanupCtx, admin); err != nil {
-			t.Errorf("delete private Kafka topic: %v", err)
+		response, err := req.RequestWith(cleanupCtx, admin)
+		if err != nil || len(response.Topics) != 1 || response.Topics[0].ErrorCode != 0 {
+			t.Errorf("delete private Kafka topic %s: %#v %v", topic, response, err)
+			return
 		}
+		t.Logf("deleted private Kafka topic=%s", topic)
 	})
 	return &isolatedLeaseKafkaBus{Client: client, topic: topic}
 }

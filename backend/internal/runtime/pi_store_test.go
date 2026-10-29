@@ -126,7 +126,7 @@ func TestModelProjectionRejectsInvalidReportedTiming(t *testing.T) {
 
 func TestModelEvidencePersistsAndUsageCannotAttachToPriorHarnessAttempt(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "model evidence"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "model evidence"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,17 +134,17 @@ func TestModelEvidencePersistsAndUsageCannotAttachToPriorHarnessAttempt(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
-		ConversationID: conversation.ID, Content: "actual goal", AgentID: "browser-eval",
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
+		ConversationID: conversation.ID, Content: "actual goal",
 		Model: event.ModelRef{Provider: "pi", Name: "model"}, IdempotencyKey: t.Name(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,14 +174,14 @@ func TestModelEvidencePersistsAndUsageCannotAttachToPriorHarnessAttempt(t *testi
 		!strings.Contains(string(details.Usage[0].Details), `"cost_micros": 0`) {
 		t.Fatalf("durable usage = %#v", details.Usage)
 	}
-	if _, err := piStore.StartRun(ctx, command); !errors.Is(err, postgres.ErrRunAlreadyTerminal) {
-		t.Fatalf("redelivery must reconcile instead of allocating another attempt: %v", err)
+	if _, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command)); !errors.Is(err, postgres.ErrCapacityBusy) {
+		t.Fatalf("active redelivery must defer instead of allocating another attempt: %v", err)
 	}
 }
 
 func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi finish evidence"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi finish evidence"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -191,21 +191,21 @@ func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "finish the browser case",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-finish-evidence",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
 
 func TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi failed tool evidence"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi failed tool evidence"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -323,21 +323,21 @@ func TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "assert missing text",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-failed-tool-evidence",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence(t *testing.T) {
 
 func TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi finish deferral"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi finish deferral"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -409,20 +409,20 @@ func TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion(t *testing.T
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "finish case",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-finish-deferral",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion(t *testing.T
 
 func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi trace"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi trace"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -458,18 +458,18 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "inspect and report",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model", ReasoningEffort: "high"},
 		IdempotencyKey: "pi-trace-full",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := event.RunCommand{
 		RunID:          run.ID,
 		ConversationID: conversation.ID,
@@ -482,7 +482,7 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 		ArtifactScope: run.ID,
 	}
 
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 
 func TestPostgresPiTraceStoreAssociatesObservationsWithExactToolCall(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi observation association"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi observation association"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -585,21 +585,21 @@ func TestPostgresPiTraceStoreAssociatesObservationsWithExactToolCall(t *testing.
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "interleave browser tools",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-observation-association",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestPostgresPiTraceStoreAssociatesObservationsWithExactToolCall(t *testing.
 
 func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t *testing.T) {
 	ctx, pool, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi invalid observation association"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi invalid observation association"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -670,21 +670,21 @@ func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "reject invalid observation association",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-invalid-observation-association",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -723,8 +723,8 @@ func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t
 		foreignRef,
 		harEvent(piharness.EventToolStarted, run.ID, foreignRef.ProviderAttemptID, 1,
 			`{"tool_call_id":"foreign","tool_name":"mcp__browser_harness__click"}`),
-	); err != nil {
-		t.Fatalf("append foreign tool start: %v", err)
+	); !errors.Is(err, postgres.ErrStaleFence) {
+		t.Fatalf("unfenced foreign attempt wrote evidence: %v", err)
 	}
 	if err := piStore.AppendHarnessEvent(
 		ctx, ref, harEvent(piharness.EventObservation, run.ID, ref.ProviderAttemptID, 2,
@@ -736,7 +736,7 @@ func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t
 
 func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) {
 	ctx, pool, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi checkpoint"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi checkpoint"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -746,52 +746,51 @@ func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "checkpoint test",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-checkpoint-match",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	// Advance the run's checkpoint as if the engine path had progressed it.
-	if _, err := pool.Exec(ctx, `UPDATE runs SET checkpoint_version = 5 WHERE id = $1`, run.ID); err != nil {
-		t.Fatalf("advance checkpoint: %v", err)
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
+	command := managedFixtureCommand(t, ctx, piStore, commandFor(run.ID))
+	forged := command
+	forged.CheckpointVersion = 5
+	if _, err := piStore.StartRun(ctx, forged); !errors.Is(err, postgres.ErrConflict) {
+		t.Fatalf("altered command checkpoint = %v, want ErrConflict", err)
 	}
-
-	piStore := PostgresPiTraceStore{Store: store}
-	command := event.RunCommand{
-		RunID:             run.ID,
-		ConversationID:    conversation.ID,
-		Model:             event.ModelRef{Provider: "pi", Name: "browser-model"},
-		Messages:          []domain.Message{{ID: "m", ConversationID: conversation.ID, Ordinal: 1, Role: "user", Content: "go"}},
-		CheckpointVersion: 5,
-	}
-	if _, err := piStore.StartRun(ctx, command); err != nil {
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
 		t.Fatalf("start run with matching checkpoint = %v, want nil", err)
+	}
+	if _, err := piStore.CompleteHarnessRun(ctx, ref, PiRunOutcome{Status: domain.RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if err := piStore.ReleaseRunLease(ctx, ref, true); err != nil {
+		t.Fatal(err)
 	}
 
 	// A second run with a stale checkpoint must conflict rather than silently
 	// create the root span against an unexpected checkpoint.
-	_, run2, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run2, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "checkpoint mismatch",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-checkpoint-mismatch",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run 2: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE runs SET checkpoint_version = 7 WHERE id = $1`, run2.ID); err != nil {
 		t.Fatalf("advance run 2 checkpoint: %v", err)
 	}
-	command2 := command
-	command2.RunID = run2.ID
-	command2.CheckpointVersion = 0
+	command2 := managedFixtureCommand(t, ctx, piStore, commandFor(run2.ID))
 	_, err = piStore.StartRun(ctx, command2)
 	if !errors.Is(err, postgres.ErrConflict) {
 		t.Fatalf("start run with mismatched checkpoint = %v, want ErrConflict", err)
@@ -800,7 +799,7 @@ func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) 
 
 func TestPostgresPiTraceStoreDurableCancellationOverridesSuccessfulOutcome(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi cancel"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "Pi cancel"}))
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -810,21 +809,21 @@ func TestPostgresPiTraceStoreDurableCancellationOverridesSuccessfulOutcome(t *te
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
 		ConversationID: conversation.ID,
 		Content:        "cancel me",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
 		IdempotencyKey: "pi-cancel",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 
-	piStore := PostgresPiTraceStore{Store: store}
+	piStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := piStore.StartRun(ctx, command)
+	ref, err := piStore.StartRun(ctx, managedFixtureCommand(t, ctx, piStore, command))
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}

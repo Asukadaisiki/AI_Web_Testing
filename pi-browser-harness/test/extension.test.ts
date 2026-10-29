@@ -1,3 +1,4 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { BROWSER_TOOL_NAMES } from "../src/mcp/schemas.js";
-import { createBrowserSession, type BrowserSession } from "../src/pi-session.js";
+import type { PiSession } from "../src/pi-session.js";
+import { createSelectedBrowserSession } from "./fixtures/selected-harness.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
 
 // A real stdio child exercises Pi's MCP initialization and tools/list discovery.
@@ -58,7 +60,7 @@ describe("sequential browser MCP registration", () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-sequential-mcp-"));
     const childPath = join(cwd, "mcp-child.mjs");
     let piSession: AgentSession | undefined;
-    let browserSession: BrowserSession | undefined;
+    let browserSession: PiSession | undefined;
     let unsubscribeErrors: (() => void) | undefined;
     const errors: unknown[] = [];
 
@@ -85,6 +87,7 @@ describe("sequential browser MCP registration", () => {
         },
       }));
       const request: RunRequest = {
+  execution: browserExecution, ...environmentLease,
         protocol_version: "pi-browser-harness.v1",
         run_id: "sequential_run",
         attempt_id: "sequential_attempt",
@@ -104,7 +107,7 @@ describe("sequential browser MCP registration", () => {
         },
       });
 
-      browserSession = await createBrowserSession(request, {
+      browserSession = await createSelectedBrowserSession(request, {
         cwd,
         mcpChildPath: childPath,
         modelRuntime: runtime,

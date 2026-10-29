@@ -1,3 +1,4 @@
+import { workerOptions } from "./fixtures/selected-harness.js";
 import { EventEmitter } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
@@ -19,7 +20,7 @@ it("awaited MCP close preserves the session and rejects when real worker DELETE 
   const address = worker.address();
   if (!address || typeof address === "string") throw new Error("worker failed to listen");
   const builder = await CaseBuilder.create({
-    worker: new WorkerClient(`http://127.0.0.1:${address.port}`),
+    worker: new WorkerClient(`http://127.0.0.1:${address.port}`, workerOptions),
     artifactScope: "run", goal: "close browser",
   });
   builder.seedBrowserSession("browser-1");
@@ -56,7 +57,7 @@ it("EOF and repeated signals await real worker DELETE before the MCP child exits
     exit(code: number) { expect(deleted).toBe(true); exits.push(code); },
   });
   const builder = await CaseBuilder.create({
-    worker: new WorkerClient(`http://127.0.0.1:${address.port}`),
+    worker: new WorkerClient(`http://127.0.0.1:${address.port}`, workerOptions),
     artifactScope: "run", goal: "close browser",
   });
   builder.seedBrowserSession("browser-1");
@@ -90,7 +91,7 @@ it("stdio shutdown reports failed DELETE as nonzero exit and retains the session
   const address = worker.address();
   if (!address || typeof address === "string") throw new Error("worker failed to listen");
   const builder = await CaseBuilder.create({
-    worker: new WorkerClient(`http://127.0.0.1:${address.port}`),
+    worker: new WorkerClient(`http://127.0.0.1:${address.port}`, workerOptions),
     artifactScope: "run", goal: "close browser",
   });
   builder.seedBrowserSession("browser-1");

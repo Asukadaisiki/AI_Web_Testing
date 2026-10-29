@@ -1,221 +1,164 @@
 # AgentTrace Eval Hub v3
 
-AgentTrace Eval Hub turns a conversation request into a durable, browser-backed
-evaluation run. PostgreSQL is the system of record, Kafka carries commands and
-events, Redis provides best-effort live updates, and the Python worker executes
-the local storefront fixture with Playwright. The production agent loop runs
-inside one shared **session host** per Go runtime process. Each execution
-attempt selects Pi, Claude Code or Codex through its official SDK adapter.
-A separately managed Harness supplies system prompt, skills and MCP servers.
-The default browser Harness uses deterministic TypeScript logic and the worker
-HTTP API. The Go runtime consumes normalized events and writes durable traces;
-the Langfuse exporter observes those traces independently.
+One product and execution path: **Langfuse UI/BFF -> authenticated Go Control
+API -> project Registry snapshots -> fenced Runtime/Browser Workers**.
+PostgreSQL owns durable facts, Kafka delivers commands/events, Redis provides
+best-effort live wakeups, and the optional exporter projects actual traces to
+Langfuse. Each Run explicitly selects Pi, Claude Code or Codex through its
+official SDK in a shared session host.
 
-## Langfuse runtime management
+Management is mandatory. Follow [Management Runtime Setup](docs/management-runtime-setup.md)
+for private bridge/provider settings, existing Langfuse project binding,
+trusted bootstrap and canonical seed-ID handoff. Open <http://127.0.0.1:3300>
+for Conversations, encrypted browser identities, immutable Skill/Harness
+versions, reviewed MCP bindings and Services. Each Conversation owns one
+Environment; uncertain expired execution remains quarantined as
+`lost/needs_review`, not automatically replayed or reset.
 
-The Phase 0–4 management implementation uses Langfuse as the sole product UI.
-Enable `AGENTTRACE_MANAGEMENT_ENABLED=true` and follow
-[Management Runtime Setup](docs/management-runtime-setup.md) for the authenticated
-project binding, registry seed and native deployment. Open
-<http://127.0.0.1:3300> to manage Conversations, encrypted browser identities,
-Skill/MCP/Harness versions and worker drain. The native launcher does not start
-the legacy React console in management mode.
+## Native Startup
 
-Each Conversation owns one Browser Environment. Runs pin immutable reviewed
-capabilities and versions; expired execution with possible external effects is
-quarantined as `lost/needs_review` for explicit inspection or reset.
-See the [implementation plan](docs/superpowers/plans/2026-10-28-langfuse-agent-runtime-management.md)
-for phase requirements and acceptance evidence.
-
-The final UI artifact is `.next-management-20261028-04`: shared 128-character
-Skill slug validation, accessible upload feedback, and measured Services
-DLQ/audit/health/Kafka data with explicit unavailable reasons. Build and private
-bundle/source scan passed; 87 client tests and typecheck passed. The broader
-server suite has one preserved independent snapshot-provenance failure.
-See [final source/build validation](integration/langfuse-management/VALIDATION.md)
-for exact counts and the parent-owned restart/read-only retest.
-
-## Clean start
-
-The following commands describe the retained compatibility deployment.
-Use the management setup above for the Langfuse management product.
-
-The local runner uses native PostgreSQL and Redis, starts an isolated native
-Kafka broker, and runs the API, Runtime, browser Worker and React console.
-The default provider is the real `glm-5.3-flash` model. Keep its credentials
-in the ignored `.env`; execution mode is explicitly selected by
-`AGENTTRACE_MODEL_PROVIDER=openai-compatible` or `scripted`.
+Use existing private configuration and persistent roots. Do not overwrite an
+existing `.env`, initialize another Langfuse deployment or launch duplicate
+consumers against an active stack.
 
 ```bash
-# Copy only when .env does not already exist, then set the model key locally.
-cp -n .env.example .env
+# Install dependencies only when needed; Node 24 for native Langfuse.
 brew install postgresql@16 redis kafka
-brew services start postgresql@16
-brew services start redis
-cd pi-browser-harness && npm ci && npm run build && cd ..
-cd worker && uv sync && uv run playwright install chromium && cd ..
-cd web && npm ci && cd ..
-export AGENTTRACE_LOCAL_STATE="$HOME/Library/Caches/agenttrace-native"
-export LANGFUSE_NATIVE_ROOT="$AGENTTRACE_LOCAL_STATE/langfuse"
-bash integration/local/langfuse.sh setup
-bash integration/local/langfuse.sh up
-set -a
-source "$LANGFUSE_NATIVE_ROOT/agenttrace.env"
-set +a
+npm --prefix pi-browser-harness ci
+npm --prefix pi-browser-harness run build
+uv sync --project worker
+uv run --project worker playwright install chromium
+# Privately load application configuration and existing Langfuse destination keys.
 python3 integration/local/run.py --with-exporter
 ```
 
-Open the workspace at <http://127.0.0.1:5184>, inspect API health at
-<http://127.0.0.1:8180/api/v1/health>, and use the fixture site at
-<http://127.0.0.1:8124>. Langfuse is <http://localhost:3300>.
-The application database is `agenttrace_local` on native PostgreSQL `5432`;
-Kafka uses `9192`, and Redis notifications use database `3`. The runner creates
-the application database and Kafka topics. Ctrl-C stops only the processes it
-started. Existing PostgreSQL, Redis and other project processes stay running.
+Prerequisites: existing PostgreSQL/Redis, existing adapted private Langfuse and
+nonblank `AGENTTRACE_BRIDGE_TOKEN`, `AGENTTRACE_BROWSER_PROVIDER_TOKEN`,
+`AGENTTRACE_LANGFUSE_PROJECT_ID`. `--with-exporter` additionally requires LF
+base/public/secret keys. Configure real SDK credentials in ignored `.env` or
+process environment; `scripted` is only deterministic fixture execution.
+Explicit process variables override `.env`, which overrides native defaults.
 
-Native Langfuse prerequisites and initialization are documented in
-[`integration/local/langfuse.md`](integration/local/langfuse.md).
-Never commit `.env` or provider credentials. Langfuse export remains asynchronous;
-its outage does not change execution results.
+Defaults: PG `agenttrace_local` at `5432` with OS user; Kafka `127.0.0.1:9192`;
+Redis `127.0.0.1:6379` DB `3`; HTTP/API `8180`; worker `8110`; fixture `8124`;
+Langfuse `3300`; runtime concurrency `4`, group `agenttrace-runtime-local`.
+The launcher starts fixture, browser Worker, API, Runtime and optional Exporter.
+It always seeds Management before application children; it never starts or
+replaces Langfuse. Deprecated management flags cannot change the plan.
+The four Kafka topics, including Environment commands, require at least eight
+partitions. Existing undersized topics fail clearly and require an operator
+review, not an automatic partition/offset reset.
 
-## Runtime and Harness composition
+`AGENTTRACE_LOCAL_STATE` defaults to the OS temporary directory's
+`agenttrace-local`. Preserve existing profile/artifact roots and private
+`environment.key` (0600); never regenerate a key against retained profiles.
+Native startup maps the provider token to `LOOP_WORKER_INTERNAL_TOKEN` and
+refuses a conflicting worker token. The default browser allowlist is exactly
+`127.0.0.1,localhost` when unset; explicitly empty denies network.
+Ctrl-C stops only launcher-owned children; an occupied port causes refusal.
+See [Operations](docs/operations.md) and [native Langfuse ownership/setup](integration/local/langfuse.md).
 
-Choose Runtime and Harness in the Langfuse composer. Registry uploads and
-previews project Skills, publishes immutable Harness versions and binds
-system-reviewed MCP capabilities. Every Run stores a complete immutable Harness
-snapshot, including its revision. A failed-Run rerun uses that snapshot even
-after a newer version is published or its source version is revoked.
+The seed installs canonical project/Conversation IDs only in child environment.
+Use its private JSON-result handoff for the BFF and later acceptance, not an
+assumption that another shell inherits them. BFF selects Conversations
+dynamically from the bound project; a startup Conversation is not required.
+Unset exporter project filter exports all Go projects; a nonempty filter is
+rebound to the canonical seeded Go project for single-project export.
 
-| Component | Responsibility |
-| --- | --- |
-| Go control plane | Durable Runs, command delivery, concurrency, cancellation and evidence |
-| SDK adapters | Pi, Claude Code `query`, Codex `startThread/runStreamed` |
-| Registry | Immutable Skill/Harness versions and reviewed MCP capability bindings |
-| Langfuse | Product UI, project RBAC and asynchronous native trace projection |
+## Runtime And Registry
 
-The host uses Strategy to select an Adapter. Harness snapshots contain no SDK
-types; changing Runtime does not require another Harness. Generic Harnesses
-need no browser Worker. Selecting the browser MCP adds objective browser proof
-and awaited session cleanup.
+Message submission requires `content`, `runtime_id`, `harness_id` and
+`idempotency_key`. Project Registry resolves immutable versions and an owned
+ready Environment atomically. Existing managed idempotency serialization is
+preserved; replay precedes readiness. Explicit failed-Run rerun copies its
+immutable snapshot, preserving lineage even after publish/revoke.
+Historical snapshotless Runs remain inspectable, not silently executable.
 
-Configure the additional SDKs in ignored `.env`:
+The Node host supports only shared session-host execution with an explicit
+supported SDK and validated snapshot. The reviewed browser MCP supplies actual
+tool results, grounded browser progress and awaited cleanup. Generic reviewed
+Harnesses need not select browser tools, but all Runs retain managed ownership.
+There is no disk-Harness or startup-module execution fallback.
 
-```dotenv
-AGENTTRACE_CLAUDE_API_KEY=
-AGENTTRACE_CLAUDE_BASE_URL=https://api.unself.cn/v1
-AGENTTRACE_CLAUDE_MODEL=glm-5.3-flash
-AGENTTRACE_CODEX_API_KEY=
-AGENTTRACE_CODEX_BASE_URL=https://api.unself.cn/v1
-AGENTTRACE_CODEX_MODEL=glm-5.3-flash
-AGENTTRACE_CODEX_HTTP_HEADERS={}
-AGENTTRACE_CODEX_TOOL_FORMAT=flat-functions
-```
+Keep reviewed `AGENTTRACE_PI_HARNESS_ENTRY`, cwd, builtin resource/MCP paths and
+Pi/Claude/Codex credentials. `AGENTTRACE_CODEX_TOOL_FORMAT=native` is the default;
+explicit `flat-functions` adapts Responses providers that ignore namespace
+tools without replacing official SDK execution. Provider errors remain failed
+Runs. Missing per-call inputs, timings or billed costs stay unknown.
+MCP config accepts deployed reviewed capabilities, not arbitrary commands,
+host paths or environment-secret references.
 
-Compatible provider endpoints and models can replace these values. The runtime
-catalog reports local configuration readiness; actual SDK/provider failures
-remain visible as failed Runs. MCP execution accepts only deployed reviewed
-capability identifiers and schema-validated configuration. Arbitrary commands,
-host paths and `env:VARIABLE_NAME` references are rejected. Scoped Secret Manager
-references resolve only in the host; credential values are absent from catalog
-responses and execution snapshots.
-`AGENTTRACE_CODEX_TOOL_FORMAT` defaults to `native`. Set `flat-functions` for
-Responses providers that ignore namespace tools, including the tested GLM
-endpoint. This Attempt-local provider adapter preserves official SDK execution,
-actual MCP results and reported usage; it requires no separate service.
+Browser open/replay uses internal auth and complete project/Environment/
+generation/fencing identity with a held browser handle. Trace and root
+`/artifacts` reads remain authenticated and project-scoped.
+See [Architecture](docs/architecture.md) and [Contract](CONTRACT.md).
 
 ## Verify
 
-Verify the complete real-model workflow against the local stack:
+Offline native regression (does not operate the deployed stack):
 
 ```bash
-AGENTTRACE_E2E_POSTGRES_DSN="postgresql://$(whoami)@127.0.0.1:5432/agenttrace_local" \
-python3 integration/local/acceptance.py \
-  --env-file "$LANGFUSE_NATIVE_ROOT/agenttrace.env"
+python3 -m unittest discover -s integration/local -p '*_test.py'
+node --test integration/local/langfuse.test.mjs
+cd backend
+go test . -run '^Test(OperatorFilesDescribePortableManagedStartup|NativeManagedStartupEnablesParallelRuntimeDelivery|RetiredProductPathsAreAbsent|RetiredV2PathsAreAbsent)$' -count=1
 ```
 
-The acceptance retains its scoped project and verifies success, failure, active
-cancellation, PostgreSQL evidence, Kafka/outbox delivery, Redis notifications,
-ordered SSE replay and real Langfuse traces. Reports omit credentials and payloads.
-Go integration tests must use a separate database named `agenttrace_test_*`
-and a dedicated Redis test database, never the application database.
+Python discovery includes `support_test.py`: shared environment, PG credential
+isolation, SSE parsing, bounded polling and authenticated tracked cleanup.
+Infrastructure administration and its owned-process/isolated-DB guards remain
+separate. Tests may create temporary files and test-owned children.
 
-Verify the SDK composition matrix with browser cleanup acknowledgements:
+Parent-authorized live acceptance against already-running managed services:
 
 ```bash
-# Keep this test-only proxy running in another terminal.
-python3 integration/local/worker_audit.py --port 8112 \
-  --log "$AGENTTRACE_LOCAL_STATE/worker-audit.jsonl"
-AGENTTRACE_E2E_WORKER_URL=http://127.0.0.1:8112 \
-AGENTTRACE_E2E_WORKER_AUDIT="$AGENTTRACE_LOCAL_STATE/worker-audit.jsonl" \
-python3 integration/local/composition.py \
-  --env-file "$LANGFUSE_NATIVE_ROOT/agenttrace.env" \
-  --report "$AGENTTRACE_LOCAL_STATE/composition-acceptance.json"
+python3 integration/local/management.py accept --env-file <private-management-env> \
+  --timeout 360 --report <private-management-evidence.json>
 ```
 
-This creates isolated Harnesses and tests all three official SDKs with the same
-browser Harness and the same generic Harness, prompt/skill effects, negative
-assertions, cancellation, snapshots after edit/delete, failed-Run reruns, SSE
-and optional Langfuse. The running application's Worker remains on `8110`.
+It creates only its tracked acceptance Conversations/resources in the bound
+project; it never resets/deletes the seed Conversation. Actual SDK/browser,
+Registry/rerun, identity/control/reset/delete and optional drain are measured.
+Successful SDK cases check scoped PG counts, single completion, published
+outbox, two authenticated SSE reads/reconnect and optional actual LF export
+correlation/available generation input/usage. Unavailable SDKs are skipped;
+exit zero/provisional is not full UI/RBAC or fault acceptance.
+See setup for finite `management_faults.py` and owned isolated
+`infrastructure_faults.py` workflows.
 
-Verified native results and architecture corrections are recorded in
-[`docs/remediation-acceptance-2026-10-28.md`](docs/remediation-acceptance-2026-10-28.md).
-The three official SDKs, independent Harness snapshots and optional Langfuse
-passed all 15 composition scenarios; see
-[`docs/runtime-harness-acceptance-2026-10-28.md`](docs/runtime-harness-acceptance-2026-10-28.md).
+Legacy suites were retired, not declared equivalent: Redis TTL, detailed
+command/inbox counts, fixed-model timing/name/current-goal export checks and
+generic composition matrix are not all migrated. Parent owns combined Go/Host/
+Worker regression, isolated PG checks, live SDK/UI/password evidence, controlled
+restart and final cleanup. Langfuse feature tests run in the sibling checkout:
+see [current source/build contract](integration/langfuse-management/README.md).
+Those `pnpm --filter web` commands target Langfuse, not a root console.
 
-Individual layers:
+Dated [remediation](docs/remediation-acceptance-2026-10-28.md),
+[composition](docs/runtime-harness-acceptance-2026-10-28.md) and
+[Langfuse validation](integration/langfuse-management/VALIDATION.md) retain
+their original tested scope/build identity. They are not proof of current
+deployment parity. [Cleanup integration report](docs/management-only-cleanup-2026-10-28.md)
+is parent-owned and records fresh final gates.
 
-```bash
-cd backend && go test -p 1 ./...
-cd worker && uv run python -m unittest discover -s tests -t .
-cd web && npm test -- --run --minWorkers=1 --maxWorkers=2 && npm run build
-AGENTTRACE_API_URL=http://127.0.0.1:8180 \
-AGENTTRACE_E2E_POSTGRES_DSN="postgresql://$(whoami)@127.0.0.1:5432/agenttrace_local" \
-  npm run test:e2e
-```
-
-`integration/v3` retains the older Compose-specific scenarios for container
-deployments. The native workflow uses `integration/local`; it needs no Docker.
-
-The shared-host integration test can run without Compose. Build the Node
-package, then point the Go test at its compiled entrypoint:
-
-```bash
-cd pi-browser-harness
-npm ci --ignore-scripts --no-audit --no-fund
-npm run build
-cd ../backend
-AGENTTRACE_TEST_HARNESS_ENTRY="$(pwd)/../pi-browser-harness/dist/main.js" \
-  go test -race ./internal/piharness -run TestSharedHostWithRealPiAndReplacementHarness -count=1
-```
-
-It exercises the real Pi SDK and MCP transport with a replacement Harness and
-controlled HTTP execution, including concurrent sessions, targeted cancellation,
-cleanup acknowledgements and process reuse. Native acceptance separately checks
-PostgreSQL, Kafka, Redis, Playwright and Langfuse.
-
-For operations, reset procedures, backlog inspection, and failure recovery, see
-[`docs/operations.md`](docs/operations.md). The architecture and canonical
-browser scenario are documented in
-[`docs/architecture.md`](docs/architecture.md).
-
-## Source layout
+## Source Layout
 
 | Path | Responsibility |
 | --- | --- |
-| `backend/cmd/agenttrace-api` | HTTP API, PostgreSQL writes, and outbox relay |
-| `backend/cmd/agenttrace-runtime` | Kafka command consumer and durable run runtime |
-| `backend/cmd/agenttrace-exporter` | Optional Langfuse event exporter |
-| `backend/internal/api/v3` | REST, SSE, health, and artifact contracts |
-| `backend/internal/domain`, `event`, `execution` | Run/event contracts and SDK-free execution snapshots |
-| `backend/internal/piharness` | Shared session-host transport, process supervision and JSONL validation |
-| `backend/internal/postgres` | PostgreSQL schema and durable repositories |
-| `backend/internal/traceprojection` | Derived Trace step projection from operation evidence |
-| `pi-browser-harness` | Generic session host, Pi/Claude Code/Codex SDK adapters, Harness materialization and browser tools |
-| `pi-browser-harness/Dockerfile` | Multi-stage image: builds the harness with Node.js and installs it alongside the Go runtime |
-| `worker/loop_worker` | Worker HTTP API and Playwright execution |
-| `web/src/features/trace` | Trace parsing, tree normalization, and derived-node inspection |
-| `web/src/features/workspace` | Three-column project, conversation, and trace workspace |
-| `fixtures/contract/case_contract.json` | Retained browser case contract |
-| `integration/local` | Native application/Langfuse launchers, real-model acceptance and fault drills |
-| `integration/v3` | Canonical Compose scenario and failure drills |
+| `backend/cmd/agenttrace-api` | Authenticated Control API and outbox relay |
+| `backend/cmd/agenttrace-management-seed` | Trusted Registry/binding bootstrap |
+| `backend/cmd/agenttrace-runtime` | Kafka delivery, leases, fenced execution |
+| `backend/cmd/agenttrace-exporter` | Optional asynchronous Langfuse projection |
+| `backend/internal/api/v3`, `postgres` | Scoped API, immutable facts, additive migrations |
+| `backend/internal/piharness` | Shared JSONL host transport and supervision |
+| `pi-browser-harness` | Explicit SDK adapters, snapshot materialization, MCP/browser tools |
+| `worker/loop_worker` | Authenticated managed browser provider and replay |
+| `fixtures/contract/case_contract.json` | Retained browser interoperability contract |
+| `integration/local` | Mandatory native launcher, focused support, managed/owned acceptance |
+| `integration/langfuse-management` | Retained Langfuse source capture and feature contracts |
+
+Dockerfiles remain portable component build definitions, with explicit Runtime
+and Worker commands. They are not a second deployment orchestrator. Direct
+image startup requires trusted bootstrap, native/reachable infrastructure,
+managed secrets, stable encrypted-profile key/root and shared artifact mounts;
+the Runtime image includes reviewed host resources and MCP entry paths.

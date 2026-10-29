@@ -1,3 +1,4 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { expect, it, vi } from "vitest";
 import { prepareHarnessResources } from "../src/harness-resources.js";
 import type { RunRequest } from "../src/run-protocol.js";
@@ -6,6 +7,7 @@ import { WorkerClient } from "../src/browser/worker-client.js";
 it("materializes environment routing and provider auth only in the host-owned MCP descriptor", async () => {
   vi.stubEnv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "host-only-token");
   const request: RunRequest = {
+  execution: browserExecution, ...environmentLease,
     protocol_version: "pi-browser-harness.v1", run_id: "r", attempt_id: "a", goal: "verify",
     model: { provider: "scripted", name: "fixture", reasoning_effort: "off" },
     worker_url: "http://assigned:8100", artifact_scope: "r",

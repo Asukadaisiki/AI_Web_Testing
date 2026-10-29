@@ -45,7 +45,8 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 				t.Fatal(err)
 			}
 			store := postgres.NewStore(pool)
-			project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "lease"})
+			rememberFixturePool(t, store, pool)
+			project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "lease"}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,14 +54,15 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{ConversationID: conversation.ID, Content: "test", AgentID: "test", Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: "lease"})
+			_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{ConversationID: conversation.ID, Content: "test", Model: event.ModelRef{Provider: "scripted", Name: "test"}, IdempotencyKey: "lease"}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := pool.Exec(ctx, `INSERT INTO environments(id,project_id,conversation_id,state) VALUES('env',$1,$2,'ready')`, project.ID, conversation.ID); err != nil {
+			environment, err := store.GetConversationEnvironment(ctx, conversation.ID)
+			if err != nil {
 				t.Fatal(err)
 			}
-			store.SetManagementEnabled(true)
+
 			for _, node := range []postgres.WorkerRegistration{
 				{ID: "runtime", Role: "runtime", Capacity: 1},
 				{ID: "browser", Role: "browser", Endpoint: "http://assigned:8100", Capacity: 1},
@@ -69,7 +71,7 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 					t.Fatal(err)
 				}
 			}
-			if err := store.BindEnvironmentWorker(ctx, "env", "browser"); err != nil {
+			if err := store.BindEnvironmentWorker(ctx, environment.ID, "browser"); err != nil {
 				t.Fatal(err)
 			}
 			process := &releaseAwareProcess{ack: ack}
@@ -91,9 +93,11 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 				process.err = piharness.ErrPrematureExit
 			}
 			command := commandFor(run.ID)
-			command.ProjectID, command.EnvironmentID, command.ProfileGeneration = project.ID, "env", 1
+			command.ProjectID, command.EnvironmentID, command.ProfileGeneration = project.ID, environment.ID, 1
 			command.ConversationID = conversation.ID
-			runner := PiRunner{Process: process, Store: PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime", LeaseTTL: time.Minute}}
+			traceStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime", LeaseTTL: time.Minute}
+			command = managedFixtureCommand(t, ctx, traceStore, command)
+			runner := PiRunner{Process: process, Store: traceStore}
 			err = runner.Run(ctx, command)
 			if ack && err != nil || !ack && !isTerminalRunError(err) {
 				t.Fatalf("run lifecycle: %v", err)
@@ -101,7 +105,7 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 			var runState, envState, attemptState string
 			var used int
 			piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT status FROM runs WHERE id=$1`, run.ID), &runState)
-			piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT state FROM environments WHERE id='env'`), &envState)
+			piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT state FROM environments WHERE id=$1`, environment.ID), &envState)
 			piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT status FROM harness_attempts WHERE run_id=$1`, run.ID), &attemptState)
 			piLeaseTestScan(t, pool.QueryRow(ctx, `SELECT sum(in_use) FROM worker_nodes`), &used)
 			if ack {
@@ -112,7 +116,7 @@ func TestPiManagedPostgresLifecycleRetainsCapacityUntilAcknowledged(t *testing.T
 				if runState != "failed" || envState != "needs_review" || attemptState != "lost" || used != 2 {
 					t.Fatalf("crashed lifecycle: %s %s %s %d", runState, envState, attemptState, used)
 				}
-				if _, err := store.ClaimHarnessLease(ctx, postgres.LeaseClaim{RunID: run.ID, ProjectID: project.ID, EnvironmentID: "env", ProfileGeneration: 1, RuntimeWorkerID: "runtime", ProviderAttemptID: "never-replayed"}); !errors.Is(err, postgres.ErrRunAlreadyTerminal) {
+				if _, err := store.ClaimHarnessLease(ctx, postgres.LeaseClaim{RunID: run.ID, ProjectID: project.ID, EnvironmentID: environment.ID, ProfileGeneration: 1, RuntimeWorkerID: "runtime", ProviderAttemptID: "never-replayed"}); !errors.Is(err, postgres.ErrRunAlreadyTerminal) {
 					t.Fatalf("crashed SDK replayed: %v", err)
 				}
 			}

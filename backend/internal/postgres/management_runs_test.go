@@ -11,7 +11,7 @@ import (
 
 func TestManagementRunPinsSnapshotAndReplaysAfterRevocation(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
-	store.SetManagementEnabled(true)
+
 	project, err := store.CreateProject(ctx, CreateProjectParams{Name: "managed", LangfuseProjectID: "lf-managed"})
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestManagementRunPinsSnapshotAndReplaysAfterRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params := CreateMessageParams{ConversationID: conversation.ID, Content: "inspect", AgentID: "pi",
+	params := CreateMessageParams{ConversationID: conversation.ID, Content: "inspect",
 		Model: event.ModelRef{Provider: "scripted", Name: "fixture"}, IdempotencyKey: "key",
 		RuntimeID: "pi", HarnessVersionID: harness.ID}
 	if _, _, err := store.CreateMessageAndRun(ctx, params); !errors.Is(err, ErrConflict) {

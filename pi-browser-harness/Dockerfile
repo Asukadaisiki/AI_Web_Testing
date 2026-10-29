@@ -50,3 +50,10 @@ WORKDIR /app/backend
 RUN go mod download
 
 WORKDIR /app/backend
+ENV AGENTTRACE_PI_HARNESS_ENTRY=/app/pi-browser-harness/dist/main.js \
+    AGENTTRACE_PI_HARNESS_DIR=/app \
+    AGENTTRACE_BUILTIN_HARNESS_DIR=/app/pi-browser-harness/resources \
+    AGENTTRACE_BUILTIN_MCP_ENTRY=/app/pi-browser-harness/dist/mcp/server.js
+
+# Build definition only: deployment supplies managed secrets, bootstrap and mounts.
+CMD ["go", "run", "./cmd/agenttrace-runtime"]

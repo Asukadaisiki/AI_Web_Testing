@@ -38,14 +38,14 @@ func TestRunCompletionRejectsMissingOrMismatchedIdentityAndNonterminalStatus(t *
 	}
 }
 
-func TestQueuedLegacyCompletionsDecodeWithoutWeakeningNewContract(t *testing.T) {
+func TestRetiredCompletionAliasesAreRejected(t *testing.T) {
 	for kind, raw := range map[string]string{
 		"runtime.completed": `{"RunID":"run-1","Status":"succeeded"}`,
 		"harness.completed": `{"status":"cancelled"}`,
 	} {
 		payload, err := DecodeRunCompletion(kind, "run-1", json.RawMessage(raw))
-		if err != nil || payload.RunID != "run-1" {
-			t.Fatalf("decode queued %s = %#v, %v", kind, payload, err)
+		if err == nil || IsRunCompletion(kind) {
+			t.Fatalf("accepted retired %s = %#v, %v", kind, payload, err)
 		}
 	}
 	if _, err := DecodeRunCompletion("harness.completed", "run-1", json.RawMessage(`{"run_id":"wrong","status":"succeeded"}`)); err == nil {

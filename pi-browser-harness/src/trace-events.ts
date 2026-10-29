@@ -153,7 +153,7 @@ function isTextContent(item: unknown): item is TextContent {
 /**
  * Extracts the MCP tool structured content from a Pi tool result. Pi wraps MCP
  * results in an `AgentToolResult`, whose structured content is the complete MCP
- * `CallToolResult`. Direct tool results retain the existing single-level shape.
+ * `CallToolResult`. Only that browser capability envelope is browser evidence.
  */
 function extractStructuredContent(
   result: unknown,
@@ -166,14 +166,9 @@ function extractStructuredContent(
   if (!isRecord(structured)) {
     return undefined;
   }
-  if (isBrowserHarnessMcpEnvelope(result, structured, toolName)) {
-    const mcpStructured = structured.structuredContent;
-    if (!isRecord(mcpStructured)) {
-      return undefined;
-    }
-    return mcpStructured as HarnessStructuredContent;
-  }
-  return structured as HarnessStructuredContent;
+  if (!isBrowserHarnessMcpEnvelope(result, structured, toolName)) return undefined;
+  const mcpStructured = structured.structuredContent;
+  return isRecord(mcpStructured) ? mcpStructured as HarnessStructuredContent : undefined;
 }
 
 function isBrowserHarnessMcpEnvelopeResult(

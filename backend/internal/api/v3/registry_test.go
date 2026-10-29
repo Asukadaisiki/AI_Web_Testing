@@ -27,7 +27,7 @@ func (r *registryTestRepository) PublishSkill(_ context.Context, project, id, _ 
 
 func TestManagementRegistryRoutesFailClosedAndRejectUnsafeMCP(t *testing.T) {
 	repo := &registryTestRepository{managementRepository: ownedManagementRepository()}
-	handler := New(ServerConfig{Repository: repo, ManagementEnabled: true, BridgeToken: testBridgeToken}).Handler()
+	handler := New(ServerConfig{Repository: repo, BridgeToken: testBridgeToken}).Handler()
 	for _, tc := range []struct {
 		method, path, body, role string
 		want                     int
@@ -47,7 +47,7 @@ func TestManagementRegistryRoutesFailClosedAndRejectUnsafeMCP(t *testing.T) {
 	if got.Code != 200 || !repo.published {
 		t.Fatalf("project admin publish: %d %s", got.Code, got.Body)
 	}
-	unconfigured := New(ServerConfig{Repository: repo, ManagementEnabled: true}).Handler()
+	unconfigured := New(ServerConfig{Repository: repo}).Handler()
 	got = request(t, unconfigured, http.MethodGet, "/api/v1/projects/project_1/skills", "")
 	if got.Code != 503 {
 		t.Fatalf("unauthenticated management %d", got.Code)
@@ -56,14 +56,14 @@ func TestManagementRegistryRoutesFailClosedAndRejectUnsafeMCP(t *testing.T) {
 
 func TestManagementPassesSelectorToTransactionalSnapshotResolution(t *testing.T) {
 	repo := ownedManagementRepository()
-	handler := New(ServerConfig{Repository: repo, ManagementEnabled: true, BridgeToken: testBridgeToken, Runtimes: []execution.Runtime{
+	handler := New(ServerConfig{Repository: repo, BridgeToken: testBridgeToken, Runtimes: []execution.Runtime{
 		{ID: "pi", Available: true, Model: execution.Model{Provider: "scripted", Name: "fixture"}},
 	}}).Handler()
 	got := managementRequest(handler, "POST", "/api/v1/conversations/conv_1/messages", `{"content":"run","runtime_id":"pi","harness_id":"hv_1","idempotency_key":"k"}`, "member")
 	if got.Code != 202 {
 		t.Fatalf("submit %d %s", got.Code, got.Body)
 	}
-	if repo.message.RuntimeID != "pi" || repo.message.HarnessVersionID != "hv_1" || repo.message.Execution != nil {
+	if repo.message.RuntimeID != "pi" || repo.message.HarnessVersionID != "hv_1" {
 		t.Fatalf("wrong transactional selector %+v", repo.message)
 	}
 }

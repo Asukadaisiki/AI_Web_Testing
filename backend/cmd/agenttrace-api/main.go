@@ -11,18 +11,14 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	v3 "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/api/v3"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/browserprovider"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/outbox"
@@ -59,24 +55,10 @@ func run() error {
 		return fmt.Errorf("migrate PostgreSQL: %w", err)
 	}
 	store := postgres.NewStore(pool)
-	store.SetManagementEnabled(cfg.ManagementEnabled)
-	if cfg.ManagementEnabled {
-		stopAPIHeartbeat := store.StartServiceHeartbeat(ctx, "api", processID("api"), "")
-		defer stopAPIHeartbeat()
-	}
+	stopAPIHeartbeat := store.StartServiceHeartbeat(ctx, "api", processID("api"), "")
+	defer stopAPIHeartbeat()
 	if err := store.SetEnvironmentDefaultPolicy(cfg.BrowserAllowedDomains); err != nil {
 		return fmt.Errorf("configure browser domain policy: %w", err)
-	}
-	mcpEntry, err := filepath.Abs(cfg.BuiltinMCPEntry)
-	if err != nil {
-		return errors.New("resolve builtin MCP entry failed")
-	}
-	builtin, err := execution.LoadBuiltinHarness(cfg.BuiltinHarnessDirectory, cfg.BuiltinMCPCommand, mcpEntry)
-	if err != nil {
-		return fmt.Errorf("load builtin Harness: %w", err)
-	}
-	if err := store.SeedBuiltinHarness(ctx, builtin); err != nil {
-		return fmt.Errorf("seed builtin Harness: %w", err)
 	}
 
 	bus, err := kafka.New(kafka.Config{Brokers: cfg.Kafka.Brokers})
@@ -85,29 +67,24 @@ func run() error {
 	}
 	defer bus.Close()
 	var kafkaLag func(context.Context) serviceprobe.Measurement
-	if cfg.ManagementEnabled {
-		probe, probeErr := serviceprobe.NewKafkaLag(cfg.Kafka)
-		if probeErr == nil {
-			defer probe.Close()
-			kafkaLag = probe.Measure
-		}
+	probe, probeErr := serviceprobe.NewKafkaLag(cfg.Kafka)
+	if probeErr == nil {
+		defer probe.Close()
+		kafkaLag = probe.Measure
 	}
-	var provider *browserprovider.Client
-	if cfg.ManagementEnabled {
-		provider, err = browserprovider.New(cfg.WorkerURL, cfg.BrowserProviderToken)
-		if err != nil {
-			return fmt.Errorf("configure browser provider: %w", err)
-		}
-		lifecycleCtx, cancelLifecycle := context.WithCancel(ctx)
-		lifecycleDone := make(chan struct{})
-		go func() {
-			defer close(lifecycleDone)
-			_ = browserprovider.ConsumeLifecycle(lifecycleCtx, bus, store, provider, func(err error) {
-				log.Printf("environment lifecycle: %v", err)
-			})
-		}()
-		defer func() { cancelLifecycle(); <-lifecycleDone }()
+	provider, err := browserprovider.New(cfg.WorkerURL, cfg.BrowserProviderToken)
+	if err != nil {
+		return fmt.Errorf("configure browser provider: %w", err)
 	}
+	lifecycleCtx, cancelLifecycle := context.WithCancel(ctx)
+	lifecycleDone := make(chan struct{})
+	go func() {
+		defer close(lifecycleDone)
+		_ = browserprovider.ConsumeLifecycle(lifecycleCtx, bus, store, provider, func(err error) {
+			log.Printf("environment lifecycle: %v", err)
+		})
+	}()
+	defer func() { cancelLifecycle(); <-lifecycleDone }()
 
 	var (
 		redisClient *goredis.Client
@@ -144,15 +121,8 @@ func run() error {
 			return redisClient.Ping(checkCtx).Err()
 		}
 	}
-	profile, err := agentprofile.LoadBrowserEval()
-	if err != nil {
-		return fmt.Errorf("load browser profile: %w", err)
-	}
-
 	relayConfig := outbox.Config{WorkerID: processID("api-outbox")}
-	if cfg.ManagementEnabled {
-		relayConfig.Observe = store.NewServiceObserver("outbox_relay", relayConfig.WorkerID, "")
-	}
+	relayConfig.Observe = store.NewServiceObserver("outbox_relay", relayConfig.WorkerID, "")
 	relay := outbox.NewRelay(pool, bus, relayConfig)
 	relayCtx, cancelRelay := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
@@ -166,17 +136,13 @@ func run() error {
 	}()
 
 	api := v3.New(v3.ServerConfig{
-		Repository:           store,
-		Profile:              profile,
-		Model:                configuredModel(cfg.Model, profile),
-		Runtimes:             cfg.RuntimeCatalog(),
-		Stream:               stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
-		ArtifactDir:          cfg.ArtifactDir,
-		BridgeToken:          cfg.BridgeToken,
-		BridgeProjectID:      cfg.BridgeProjectID,
-		BridgeConversationID: cfg.BridgeConversationID,
-		ManagementEnabled:    cfg.ManagementEnabled,
-		BrowserProvider:      provider,
+		Repository:      store,
+		Runtimes:        cfg.RuntimeCatalog(),
+		Stream:          stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
+		ArtifactDir:     cfg.ArtifactDir,
+		BridgeToken:     cfg.BridgeToken,
+		BridgeProjectID: cfg.BridgeProjectID,
+		BrowserProvider: provider,
 		Health: v3.HealthDependencies{
 			Postgres: pool.Ping,
 			Kafka:    bus.Health,
@@ -210,17 +176,6 @@ func run() error {
 		}
 		return nil
 	}
-}
-
-func configuredModel(cfg config.Model, profile agentprofile.Profile) event.ModelRef {
-	reasoningEffort := cfg.ReasoningEffort
-	if reasoningEffort == "" {
-		reasoningEffort = profile.Model.ReasoningEffort
-	}
-	if cfg.Provider == "scripted" {
-		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: reasoningEffort}
-	}
-	return event.ModelRef{Provider: cfg.Provider, Name: cfg.Name, ReasoningEffort: reasoningEffort}
 }
 
 func relayLoop(ctx context.Context, relay *outbox.Relay) {

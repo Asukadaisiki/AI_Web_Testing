@@ -17,11 +17,8 @@ import (
 type CreateMessageParams struct {
 	ConversationID   string
 	Content          string
-	AgentID          string
 	Model            event.ModelRef
-	Operations       []event.Operation
 	IdempotencyKey   string
-	Execution        *execution.Spec
 	RuntimeID        string
 	HarnessVersionID string
 }
@@ -42,6 +39,7 @@ type createRerunResponse struct {
 }
 
 type runSpecification struct {
+	// Retain stored managed provenance; callers cannot select a legacy agent.
 	AgentID   string           `json:"agent_id"`
 	Command   event.RunCommand `json:"command"`
 	Execution *execution.Spec  `json:"execution,omitempty"`
@@ -58,10 +56,10 @@ func (s *Store) CreateMessageAndRun(
 	if err := validateCreateMessageParams(p); err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
-	p.Execution = p.Execution.Clone()
-	if s.ManagementEnabled() && (p.Execution != nil || !execution.KnownRuntime(p.RuntimeID) || p.HarnessVersionID == "") {
+	if !execution.KnownRuntime(p.RuntimeID) || p.HarnessVersionID == "" {
 		return domain.Message{}, domain.Run{}, ErrConflict
 	}
+	// Keep the established managed request hash's null/omission semantics.
 	requestHash, err := payloadHash(struct {
 		ConversationID   string            `json:"conversation_id"`
 		Content          string            `json:"content"`
@@ -74,10 +72,10 @@ func (s *Store) CreateMessageAndRun(
 	}{
 		ConversationID:   p.ConversationID,
 		Content:          p.Content,
-		AgentID:          p.AgentID,
+		AgentID:          p.RuntimeID,
 		Model:            p.Model,
-		Operations:       p.Operations,
-		Execution:        p.Execution,
+		Operations:       nil,
+		Execution:        nil,
 		RuntimeID:        p.RuntimeID,
 		HarnessVersionID: p.HarnessVersionID,
 	})
@@ -136,13 +134,11 @@ func (s *Store) CreateMessageAndRun(
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
-	if s.ManagementEnabled() {
-		harness, err := resolveProjectHarnessTx(ctx, tx, projectID, p.HarnessVersionID, p.RuntimeID)
-		if err != nil {
-			return domain.Message{}, domain.Run{}, err
-		}
-		p.Execution = &execution.Spec{RuntimeID: p.RuntimeID, Harness: harness}
+	harness, err := resolveProjectHarnessTx(ctx, tx, projectID, p.HarnessVersionID, p.RuntimeID)
+	if err != nil {
+		return domain.Message{}, domain.Run{}, err
 	}
+	selectedExecution := &execution.Spec{RuntimeID: p.RuntimeID, Harness: harness}
 	var ordinal int64
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(MAX(ordinal), 0) + 1
@@ -169,14 +165,13 @@ func (s *Store) CreateMessageAndRun(
 		ConversationID:    p.ConversationID,
 		Model:             p.Model,
 		Messages:          []domain.Message{message},
-		Operations:        append([]event.Operation(nil), p.Operations...),
 		CheckpointVersion: 0,
-		Execution:         p.Execution,
+		Execution:         selectedExecution,
 		ProjectID:         projectID,
 		EnvironmentID:     environment.ID,
 		ProfileGeneration: environment.ProfileGeneration,
 	}
-	specification, err := json.Marshal(runSpecification{AgentID: p.AgentID, Command: command, Execution: p.Execution})
+	specification, err := json.Marshal(runSpecification{AgentID: p.RuntimeID, Command: command, Execution: selectedExecution})
 	if err != nil {
 		return domain.Message{}, domain.Run{}, fmt.Errorf("marshal run specification: %w", err)
 	}
@@ -213,11 +208,7 @@ func (s *Store) CreateMessageAndRun(
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
-	commandKey := run.ID
-	if environment.ID != "" {
-		commandKey = environment.ID
-	}
-	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, commandKey, outboxEvent, outboxHash)
+	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, environment.ID, outboxEvent, outboxHash)
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
 	}
@@ -231,16 +222,11 @@ func (s *Store) CreateMessageAndRun(
 }
 
 func validateCreateMessageParams(p CreateMessageParams) error {
-	if err := p.Execution.Validate(); err != nil {
-		return err
-	}
 	switch {
 	case strings.TrimSpace(p.ConversationID) == "":
 		return errors.New("conversation id is required")
 	case strings.TrimSpace(p.Content) == "":
 		return errors.New("message content is required")
-	case strings.TrimSpace(p.AgentID) == "":
-		return errors.New("agent id is required")
 	case strings.TrimSpace(p.Model.Provider) == "" || strings.TrimSpace(p.Model.Name) == "":
 		return errors.New("model provider and name are required")
 	case strings.TrimSpace(p.IdempotencyKey) == "":
@@ -383,6 +369,10 @@ func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Ru
 		return rerun, nil
 	}
 
+	specification, err = validateManagedRunTx(ctx, tx, source)
+	if err != nil {
+		return domain.Run{}, err
+	}
 	environment, err := s.checkConversationRunnable(ctx, tx, conversationID)
 	if err != nil {
 		return domain.Run{}, err
@@ -428,11 +418,7 @@ func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Ru
 	if err != nil {
 		return domain.Run{}, err
 	}
-	commandKey := rerun.ID
-	if environment.ID != "" {
-		commandKey = environment.ID
-	}
-	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, commandKey, envelope, outboxHash)
+	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, environment.ID, envelope, outboxHash)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -484,33 +470,4 @@ func replayCreatedRerun(
 		return domain.Run{}, fmt.Errorf("read idempotent rerun: %w", err)
 	}
 	return rerun, nil
-}
-
-// ClaimRun atomically transitions a queued or already-running run for the expected checkpoint.
-func (s *Store) ClaimRun(
-	ctx context.Context, runID string, expectedCheckpoint int64,
-) (domain.Run, bool, error) {
-	if s == nil || s.pool == nil {
-		return domain.Run{}, false, errors.New("postgres store is not configured")
-	}
-	run, err := scanRun(s.pool.QueryRow(ctx, `
-		UPDATE runs
-		SET status = 'running', checkpoint_version = checkpoint_version + 1,
-		    started_at = COALESCE(started_at, now()), updated_at = now()
-		WHERE id = $1
-		  AND status IN ('queued', 'running')
-		  AND checkpoint_version = $2
-		RETURNING id, project_id, conversation_id,
-		          COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
-		          status, specification, checkpoint_version,
-		          cancel_requested_at, started_at, finished_at, created_at, updated_at`,
-		runID, expectedCheckpoint,
-	))
-	if errors.Is(err, ErrNotFound) {
-		return domain.Run{}, false, nil
-	}
-	if err != nil {
-		return domain.Run{}, false, fmt.Errorf("claim run %q: %w", runID, err)
-	}
-	return run, true, nil
 }

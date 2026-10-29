@@ -1,3 +1,4 @@
+import { browserExecution, environmentLease } from "./fixtures/selected-harness.js";
 import { access, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { prepareHarnessResources } from "../src/harness-resources.js";
 import type { RunRequest } from "../src/run-protocol.js";
 
 const request: RunRequest = {
+  execution: browserExecution, ...environmentLease,
   protocol_version: "pi-browser-harness.v1", run_id: "run", attempt_id: "attempt",
   goal: "verify checkout", worker_url: "http://127.0.0.1:8080", artifact_scope: "run/attempt",
   model: { provider: "scripted", name: "test", reasoning_effort: "off" },
@@ -99,11 +101,14 @@ describe("attempt harness resources", () => {
     expect(resources.servers[0]?.env).toEqual({ TEXT: "{{goal}}" });
   });
 
-  it("copies legacy browser skills and uses browser completion and host-only cleanup", async () => {
+  it("materializes only selected browser skills and preserves completion and host-only cleanup", async () => {
     const resources = await prepareHarnessResources(request);
     disposals.push(resources.dispose);
-    expect(await readFile(join(resources.skillPaths[0]!, "browser-case-authoring/SKILL.md"), "utf8"))
-      .toContain("browser-case-authoring");
+    expect(await readFile(join(resources.skillPaths[0]!, "selected-browser/SKILL.md"), "utf8"))
+      .toContain("Follow selected browser instructions");
+    await expect(access(join(resources.skillPaths[0]!, "browser-case-authoring"))).rejects.toThrow();
+    expect(resources.systemPrompt).toBe(browserExecution.harness.system_prompt);
+    expect(resources.definition).not.toHaveProperty("scriptedResponse");
     expect(resources.servers[0]).toMatchObject({
       name: "browser-harness", hostOnlyTools: ["close_session"],
       env: { AGENTTRACE_HARNESS_WORKER_URL: request.worker_url },

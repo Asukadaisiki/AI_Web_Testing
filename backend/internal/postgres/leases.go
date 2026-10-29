@@ -86,9 +86,10 @@ func (s *Store) ClaimHarnessLease(ctx context.Context, p LeaseClaim) (result Har
 	}
 	var status domain.RunStatus
 	var conversationID, projectID string
+	var specification json.RawMessage
 	var cancelRequested bool
-	if err := tx.QueryRow(ctx, `SELECT status,conversation_id,project_id,cancel_requested_at IS NOT NULL FROM runs WHERE id=$1 FOR UPDATE`, p.RunID).
-		Scan(&status, &conversationID, &projectID, &cancelRequested); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT status,conversation_id,project_id,cancel_requested_at IS NOT NULL,specification FROM runs WHERE id=$1 FOR UPDATE`, p.RunID).
+		Scan(&status, &conversationID, &projectID, &cancelRequested, &specification); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return result, ErrNotFound
 		}
@@ -100,6 +101,17 @@ func (s *Store) ClaimHarnessLease(ctx context.Context, p LeaseClaim) (result Har
 	if isTerminalStatus(status) {
 		return result, ErrRunAlreadyTerminal
 	}
+	managed, err := validateManagedRunTx(ctx, tx, domain.Run{ID: p.RunID, ProjectID: projectID, ConversationID: conversationID, Specification: specification})
+	if err != nil {
+		return result, err
+	}
+	if managed.Command.EnvironmentID != p.EnvironmentID || managed.Command.ProfileGeneration != p.ProfileGeneration {
+		return result, ErrStaleFence
+	}
+	if p.RuntimeID != "" && p.RuntimeID != managed.Command.Execution.RuntimeID {
+		return result, ErrConflict
+	}
+	p.RuntimeID = managed.Command.Execution.RuntimeID
 	if env.ProfileGeneration != p.ProfileGeneration {
 		return result, ErrStaleFence
 	}

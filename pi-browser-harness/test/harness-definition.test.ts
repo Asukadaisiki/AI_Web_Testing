@@ -1,15 +1,15 @@
+import { genericExecution } from "./fixtures/selected-harness.js";
 import { Readable, Writable } from "node:stream";
-import { createAgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { HarnessDefinition } from "../src/harness-definition.js";
-import { createPiSession } from "../src/pi-session.js";
 import { serverMain, type HarnessControl } from "../src/server.js";
 import { HarnessEventWriter, type HarnessEvent, type RunRequest } from "../src/run-protocol.js";
-import { createExecutionSessionFactory, loadHarnessDefinition } from "../src/session-factory.js";
+import { createExecutionSessionFactory } from "../src/session-factory.js";
 import { main } from "../src/main.js";
 
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1",
   run_id: "lightweight",
   attempt_id: "lightweight-attempt",
@@ -17,53 +17,31 @@ const request: RunRequest = {
   model: { provider: "scripted", name: "lightweight", reasoning_effort: "off" },
 };
 
-const lightweight: HarnessDefinition = {
-  systemPrompt: "Reply directly. Do not use tools.",
-  skillPaths: [],
-  toolAllowlist: [],
-  mcpServers: [],
-  completionPolicy: ({ assistant_settled, aborted }) => ({
-    verdict: assistant_settled && !aborted ? "succeeded" : "failed",
-  }),
-};
-
 describe("switchable harness", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("selects a trusted startup module for server mode and one-shot mode", async () => {
-    vi.stubEnv("AGENTTRACE_HARNESS_MODULE",
-      new URL("./fixtures/lightweight-harness.mjs", import.meta.url).pathname);
-    for (const argv of [[], ["--server"]]) {
-      const events: (HarnessEvent | HarnessControl)[] = [];
-      const input = new Readable({ read() {} });
-      const output = new Writable({
-        write(chunk, _encoding, done) {
-          const event: HarnessEvent | HarnessControl = JSON.parse(chunk.toString());
-          events.push(event);
-          if (event.type === "harness.released") input.push(null);
-          done();
-        },
-      });
-      const running = main({ argv, input, output });
-      input.push(`${JSON.stringify(argv.length ? { type: "run", request } : request)}\n`);
-      if (!argv.length) input.push(null);
-      expect(await running).toBe(0);
-      expect(events.find((event) => event.type === "harness.settled")?.payload.verdict)
-        .toBe("succeeded");
-      expect(events.some((event) => event.type.startsWith("browser."))).toBe(false);
-    }
-  });
-
-  it("rejects a startup module without a completion policy", async () => {
-    await expect(loadHarnessDefinition(
-      new URL("./fixtures/invalid-harness.mjs", import.meta.url).href,
-    )).rejects.toThrow("default export a HarnessDefinition");
+  it("runs the selected snapshot through the shared server", async () => {
+    const events: (HarnessEvent | HarnessControl)[] = [];
+    const input = new Readable({ read() {} });
+    const output = new Writable({
+      write(chunk, _encoding, done) {
+        const event: HarnessEvent | HarnessControl = JSON.parse(chunk.toString());
+        events.push(event);
+        if (event.type === "harness.released") input.push(null);
+        done();
+      },
+    });
+    const running = main({ argv: ["--server"], input, output });
+    input.push(`${JSON.stringify({ type: "run", request })}\n`);
+    expect(await running).toBe(0);
+    expect(events.find((event) => event.type === "harness.settled")?.payload.verdict)
+      .toBe("succeeded");
+    expect(events.some((event) => event.type.startsWith("browser."))).toBe(false);
   });
 
   it("does not re-register a sibling attempt's model in the same mutable runtime", async () => {
     const received: Parameters<typeof createAgentSession>[0][] = [];
     const factory = await createExecutionSessionFactory({
-      definition: lightweight,
       createAgentSession: async (options) => {
         received.push(options);
         return createAgentSession(options);
@@ -100,11 +78,7 @@ describe("switchable harness", () => {
     const input = new Readable({ read() {} });
     const result = serverMain({
       input, output,
-      sessionFactory: async (run, { eventWriter }) => createPiSession(run, {
-        createAgentSession,
-        modelRuntime: await ModelRuntime.create({ refreshOnCreate: false }),
-        eventWriter,
-      }, lightweight),
+      sessionFactory: await createExecutionSessionFactory(),
     });
     input.push(`${JSON.stringify({ type: "run", request })}\n`);
     const released = new Promise<void>((resolve) => {
@@ -135,13 +109,15 @@ describe("switchable harness", () => {
     const sessions = await Promise.all(["one", "two"].map(async (id) => {
       let options!: Parameters<typeof createAgentSession>[0];
       const run = { ...request, attempt_id: id };
-      const session = await createPiSession(run, {
-        modelRuntime: await ModelRuntime.create({ refreshOnCreate: false }),
+      const factory = await createExecutionSessionFactory({
+        createAgentSession: async (received) => { options = received; return createAgentSession(received); },
+      });
+      const session = await factory(run, {
+        signal: new AbortController().signal,
         eventWriter: new HarnessEventWriter(run, new Writable({
           write(_chunk, _encoding, done) { done(); },
         })),
-        createAgentSession: async (received) => { options = received; return createAgentSession(received); },
-      }, lightweight);
+      });
       return { session, options };
     }));
     try {
@@ -149,7 +125,7 @@ describe("switchable harness", () => {
       expect(sessions[0]!.options?.settingsManager).not.toBe(sessions[1]!.options?.settingsManager);
       expect(sessions[0]!.options?.resourceLoader!.getExtensions().runtime)
         .not.toBe(sessions[1]!.options?.resourceLoader!.getExtensions().runtime);
-      expect(sessions[0]!.session.getActiveToolNames()).toEqual([]);
+      expect(sessions[0]!.options?.tools).toEqual([]);
     } finally {
       await Promise.all(sessions.map(({ session }) => session.close()));
     }

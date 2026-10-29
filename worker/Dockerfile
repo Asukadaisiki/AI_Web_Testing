@@ -20,3 +20,6 @@ RUN sed -i \
     && uv run --no-sync playwright install --with-deps chromium
 
 COPY worker/loop_worker ./loop_worker
+
+# Supply private provider token, stable profile key/root and shared artifact mount.
+CMD ["uv", "run", "--no-sync", "uvicorn", "loop_worker.main:app", "--host", "0.0.0.0", "--port", "8110"]

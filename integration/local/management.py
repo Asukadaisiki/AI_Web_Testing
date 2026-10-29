@@ -8,23 +8,28 @@ The optional `fixture` command serves a localStorage login fixture separately.
 from __future__ import annotations
 
 import argparse
+import base64
+from contextlib import contextmanager
 import hashlib
+import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 
-from acceptance import Acceptance, CheckFailure, load_environment, require, ROOT
+from support import AcceptanceSupport, CheckFailure, load_environment, parse_sse, require, ROOT, TERMINAL, sql_id
 
 RUNTIMES = ("pi", "claude-code", "codex")
-TERMINAL = {"succeeded", "failed", "cancelled"}
 PNG = b"\x89PNG\r\n\x1a\n"
+PUBLIC_SECRET_FIELDS = {"authorization", "cookie", "password", "token", "api_key", "secret"}
 IDENTITY_HTML = """<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Management Identity Fixture</title>
 <body><h1>Management Identity Fixture</h1><p id="identity"></p>
@@ -53,11 +58,32 @@ def sanitize(value):
     return value
 
 
+def _public_sse_value(value):
+    # Mirror runs.go's public projection, not the broader report sanitizer.
+    if isinstance(value, dict):
+        return {key: _public_sse_value(item) for key, item in value.items()
+                if key.strip().lower() not in PUBLIC_SECRET_FIELDS}
+    if isinstance(value, list):
+        return [_public_sse_value(item) for item in value]
+    return value
+
+
+def _assert_sse_safe(value, secrets):
+    if isinstance(value, dict):
+        require(not any(key.strip().lower() in PUBLIC_SECRET_FIELDS for key in value),
+                "SSE leaked a secret-bearing field")
+        for key, item in value.items():
+            _assert_sse_safe(key, secrets)
+            _assert_sse_safe(item, secrets)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_sse_safe(item, secrets)
+    elif isinstance(value, str):
+        require(not any(secret in value for secret in secrets), "SSE leaked a forbidden secret value")
+
+
 def record_id(value, prefix):
-    # SQL identifiers here are canonical IDs, never arbitrary user text.
-    import re
-    require(bool(re.fullmatch(prefix + r"_[A-Za-z0-9]+", value)), "invalid canonical " + prefix + " ID")
-    return "'" + value + "'"
+    return sql_id(value, prefix)
 
 def has_failed_assertion(trace):
     for span in trace.get("spans", []):
@@ -75,14 +101,63 @@ class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
         raise CheckFailure("Control API redirects are refused to protect bridge credentials")
 
 
-class Management(Acceptance):
+def _sse_remaining(deadline):
+    budget = deadline - time.monotonic()
+    require(budget > 0, "timed out: authenticated SSE replay")
+    return budget
+
+
+@contextmanager
+def _sse_socket_deadline(transport, deadline):
+    require(isinstance(transport, socket.socket), "unsupported SSE response transport")
+    def expire():
+        # A line/header/chunk read may contain many timely socket operations.
+        try:
+            transport.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    timer = threading.Timer(_sse_remaining(deadline), expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+        _sse_remaining(deadline)
+    finally:
+        timer.cancel()
+        timer.join()
+
+
+class _SSEDeadlineResponse(http.client.HTTPResponse):
+    def __init__(self, *args, deadline, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.deadline = deadline
+
+    def begin(self):
+        with _sse_socket_deadline(self.fp.raw._sock, self.deadline):
+            super().begin()
+
+
+class _SSEHTTPHandler(urllib.request.HTTPHandler, urllib.request.HTTPSHandler):
+    def do_open(self, http_class, req, **http_conn_args):
+        deadline = getattr(req, "sse_deadline", None)
+        if deadline is not None:
+            connection_class = http_class
+            def http_class(*args, **kwargs):
+                connection = connection_class(*args, **kwargs)
+                connection.response_class = lambda *a, **kw: _SSEDeadlineResponse(*a, deadline=deadline, **kw)
+                return connection
+        return super().do_open(http_class, req, **http_conn_args)
+
+
+class Management(AcceptanceSupport):
     def __init__(self, env, timeout):
         super().__init__(env, timeout)
         self.project_id = env.get("AGENTTRACE_PROJECT_ID", "")
         lf = env.get("AGENTTRACE_LANGFUSE_PROJECT_ID", "")
         token = env.get("AGENTTRACE_BRIDGE_TOKEN", "")
-        require(bool(self.project_id and lf and token), "project ID, LF project ID and BridgeToken are required")
-        self.opener = urllib.request.build_opener(NoCredentialRedirect())
+        require(all(value.strip() for value in (self.project_id, lf, token)),
+                "project ID, LF project ID and BridgeToken are required")
+        self.opener = urllib.request.build_opener(NoCredentialRedirect(), _SSEHTTPHandler())
         self.headers = {"Authorization": "Bearer " + token,
                         "Content-Type": "application/json",
                         "X-Agenttrace-Project-Id": self.project_id,
@@ -116,8 +191,6 @@ class Management(Acceptance):
         except (OSError, ValueError):
             raise CheckFailure("Control API unavailable or invalid response") from None
 
-    # Acceptance cleanup and inherited bounded waits must never use its
-    # unrestricted legacy adapter.
     def http(self, url, body=None, headers=None, expected=200):
         return self.request(url, body, expected=expected, headers=headers)
 
@@ -233,6 +306,136 @@ class Management(Acceptance):
         require(isinstance(value, dict), "missing durable immutable Harness snapshot")
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
+    def verify_persistence(self, run, trace):
+        rid, pid = record_id(run, "run"), record_id(self.project_id, "prj")
+        query = f"""SELECT json_build_object(
+            'spans', (SELECT count(*) FROM spans WHERE run_id=r.id),
+            'attempts', (SELECT count(*) FROM span_attempts WHERE span_id IN (SELECT id FROM spans WHERE run_id=r.id)),
+            'usage', (SELECT count(*) FROM usage_records WHERE run_id=r.id),
+            'operations', (SELECT count(*) FROM operation_results WHERE run_id=r.id),
+            'completed', (SELECT count(*) FROM run_events WHERE run_id=r.id AND event_type='run.completed'),
+            'published_outbox', (SELECT count(*) FROM outbox_events WHERE key=r.id AND published_at IS NOT NULL),
+            'pending_outbox', (SELECT count(*) FROM outbox_events WHERE key=r.id AND published_at IS NULL))
+            FROM runs r WHERE id={rid} AND project_id={pid};"""
+        counts = self.poll(lambda: (c if c["pending_outbox"] == 0 else None)
+                           if (c := self.sql(query)) else None, "scoped outbox publication")
+        require(counts["published_outbox"] > 0, "Run has no published scoped outbox")
+        require(counts["completed"] == 1, "Run must have exactly one durable completion")
+        for api_key, count_key in (("spans", "spans"), ("attempts", "attempts"),
+                                   ("usage", "usage"), ("operation_evidence", "operations")):
+            require(len(trace[api_key]) == counts[count_key], "API trace differs from scoped PostgreSQL counts")
+        return counts
+
+    def verify_sse(self, run, forbidden_values=()):
+        deadline = time.monotonic() + self.timeout
+        def remaining():
+            return _sse_remaining(deadline)
+        durable = self.sql(f"""SELECT coalesce(json_agg(json_build_object(
+            'id', e.seq::text, 'event', e.event_type, 'data', e.payload) ORDER BY e.seq), '[]'::json)
+            FROM run_events e JOIN runs r ON r.id=e.run_id
+            WHERE r.id={record_id(run, "run")} AND r.project_id={record_id(self.project_id, "prj")};""")
+        require(len(durable) >= 2, "insufficient durable events to verify reconnect")
+        require([int(e["id"]) for e in durable] == list(range(1, len(durable) + 1)),
+                "durable events contain sequence gaps")
+        require(all(isinstance(value, str) for value in forbidden_values), "SSE forbidden values must be strings")
+        # Only explicit canaries are forbidden substrings, not inferred payload values.
+        secrets = {value for value in forbidden_values if value}
+        public = [{**event, "data": _public_sse_value(event["data"])} for event in durable]
+        def read(cursor, count):
+            req = urllib.request.Request(self.api + f"/runs/{run}/events",
+                headers={**self.headers, "Last-Event-ID": str(cursor)})
+            req.sse_deadline = deadline
+            result = []
+            try:
+                with self.opener.open(req, timeout=min(15, remaining())) as response:
+                    require(response.status == 200 and response.headers.get_content_type() == "text/event-stream",
+                            "not an authenticated SSE response")
+                    transport = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                    with _sse_socket_deadline(transport, deadline):
+                        def checked_lines():
+                            while True:
+                                transport.settimeout(min(15, remaining()))
+                                raw = response.readline()
+                                remaining()
+                                if not raw:
+                                    return
+                                _assert_sse_safe(raw.decode("utf-8"), secrets)
+                                yield raw
+                        for event in parse_sse(checked_lines()):
+                            _assert_sse_safe(event, secrets)
+                            require(event.get("event") != "error", "SSE reported an error")
+                            if "id" not in event:
+                                require(event.get("event") == "token.delta", "unexpected unsequenced SSE event")
+                                continue
+                            result.append(event)
+                            if len(result) == count:
+                                break
+            except urllib.error.HTTPError as error:
+                error.close()
+                remaining()
+                raise CheckFailure("authenticated SSE request failed") from None
+            except (OSError, ValueError, http.client.HTTPException):
+                remaining()
+                raise CheckFailure("authenticated SSE unavailable or invalid response") from None
+            require(len(result) == count, "SSE ended before durable replay completed")
+            return result
+        split = max(1, len(durable) // 2)
+        first = read(0, split)
+        second = read(int(first[-1]["id"]), len(durable) - split)
+        require(first + second == public, "ordered SSE reconnect differs from canonical PostgreSQL replay")
+        return {"events": len(durable), "reconnect": True}
+
+    def validate_export(self, run, conversation, status, canonical, exported):
+        metadata = exported.get("metadata") or {}
+        require(metadata.get("agenttrace_run_id") == run and metadata.get("agenttrace_status") == status
+                and bool(metadata.get("agenttrace_end_time")), "Langfuse terminal Run correlation missing")
+        require(exported.get("sessionId") == "agenttrace-session-" + conversation,
+                "Langfuse Conversation correlation mismatch")
+        observations = {o["id"]: o for o in exported.get("observations", [])}
+        for span in canonical["spans"]:
+            if span["kind"] != "model":
+                continue
+            generation = observations.get("agenttrace-observation-" + span["id"])
+            require(generation is not None and generation.get("type") == "GENERATION",
+                    "Langfuse model generation missing")
+            if span.get("input") is not None:
+                require(generation.get("input") == span["input"], "Langfuse model input differs from canonical trace")
+            usage = [u for u in canonical["usage"] if u.get("span_id") == span["span_id"]
+                     and not (isinstance(u.get("details"), dict)
+                              and u["details"].get("granularity") == "sdk_query_model_cumulative")]
+            if usage and any(u.get("total_tokens", 0) > 0 for u in usage):
+                actual = generation.get("usageDetails") or generation.get("usage") or {}
+                for source, target in (("input_tokens", "input"), ("output_tokens", "output"), ("total_tokens", "total")):
+                    require(actual.get(target) == sum(u.get(source, 0) for u in usage),
+                            "Langfuse generation usage differs from canonical trace")
+
+    def verify_export(self, name, canonical):
+        public = self.env.get("AGENTTRACE_LANGFUSE_PUBLIC_KEY") or self.env.get("LANGFUSE_PUBLIC_KEY")
+        secret = self.env.get("AGENTTRACE_LANGFUSE_SECRET_KEY") or self.env.get("LANGFUSE_SECRET_KEY")
+        if not (public and secret):
+            self.skip(name + "-export", "Private Langfuse export credentials not supplied")
+            return None
+        base = self.env.get("AGENTTRACE_LANGFUSE_BASE_URL", "http://127.0.0.1:3300").rstrip("/")
+        entry = self.report["runs"][name]
+        req = urllib.request.Request(base + "/api/public/traces/agenttrace-trace-" + entry["run_id"],
+            headers={"Authorization": "Basic " + base64.b64encode(f"{public}:{secret}".encode()).decode()})
+        def exported():
+            try:
+                with self.opener.open(req, timeout=min(15, self.timeout)) as response:
+                    result = json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    return None
+                raise CheckFailure("Langfuse export request failed") from None
+            metadata = result.get("metadata") or {}
+            if metadata.get("agenttrace_status") != entry["status"] or not metadata.get("agenttrace_end_time"):
+                return None
+            if len(result.get("observations", [])) < len(canonical["spans"]):
+                return None
+            self.validate_export(entry["run_id"], entry["conversation_id"], entry["status"], canonical, result)
+            return {"trace_id": "agenttrace-trace-" + entry["run_id"], "observations": len(result["observations"])}
+        return self.poll(exported, "real terminal Langfuse export")
+
     def browser_evidence(self, run, trace, finish_case=True, asserted=None):
         spans = trace.get("spans", [])
         total = sum(u.get("total_tokens", 0) for u in trace.get("usage", []))
@@ -267,7 +470,11 @@ class Management(Acceptance):
             f"Open {self.fixture}. Verify Alpha is visible with assert_text. "
             "Use finish_case to create exactly one minimal case and pass its fresh-context dry run. Stop.")
         self.wait_run(name, "succeeded")
-        evidence = self.browser_evidence(rid, self.request("/runs/" + rid + "/trace"))
+        trace = self.request("/runs/" + rid + "/trace")
+        evidence = self.browser_evidence(rid, trace)
+        evidence["persistence"] = self.verify_persistence(rid, trace)
+        evidence["sse"] = self.verify_sse(rid)
+        evidence["export"] = self.verify_export(name, trace)
         evidence["snapshot_sha256"] = self.snapshot_digest(rid)
         self.report["runs"][name].update(evidence)
         return evidence

@@ -398,18 +398,13 @@ class EnvironmentProvider:
     async def execution_guard(self, request):
         session = self._active.get(request.environment_id)
         if (session is None or session.session_id != request.session_id
-                or (request.browser_session_id is not None
-                    and request.browser_session_id != session.browser_session_id)
-                or (session.project_id is not None and request.browser_session_id is None)):
+                or request.browser_session_id != session.browser_session_id):
             raise conflict("execution requires the active Environment lease and domain session")
         async with self.guard(
             session, request.profile_generation, request.fencing_token, request.environment_id,
             request.project_id,
         ):
             yield session
-
-    def owns_domain_session(self, session_id):
-        return any(session.session_id == session_id for session in self._active.values())
 
     async def close(self, session):
         record = self.require_record(session.environment_id)

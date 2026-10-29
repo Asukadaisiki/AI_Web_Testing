@@ -25,7 +25,6 @@ var (
 // Store owns transaction-scoped access to the AgentTrace PostgreSQL ledger.
 type Store struct {
 	pool              *pgxpool.Pool
-	managementEnabled atomic.Bool
 	environmentPolicy atomic.Pointer[json.RawMessage]
 }
 

@@ -6,13 +6,16 @@ shared artifacts volume. Its HTTP application is
 `loop_worker/main.py`; the worker-side case types are
 `loop_worker/contracts.py`.
 
-Run locally:
+Native managed startup is `python3 integration/local/run.py` from the repository
+root; see `../docs/management-runtime-setup.md` for mandatory private settings.
+For explicitly configured standalone worker startup:
 
 ```bash
 cd worker
 uv sync
-PLAYWRIGHT_BROWSERS_PATH=/tmp/agenttrace-playwright \
-  uv run uvicorn loop_worker.main:app --host 0.0.0.0 --port 8100
+# Privately inject LOOP_WORKER_INTERNAL_TOKEN, LOOP_ENVIRONMENTS_DIR,
+# LOOP_ENVIRONMENT_ENCRYPTION_KEY and LOOP_ARTIFACTS_DIR first.
+uv run --no-sync uvicorn loop_worker.main:app --host 127.0.0.1 --port 8110
 ```
 
 Run worker tests:
@@ -23,10 +26,11 @@ PLAYWRIGHT_BROWSERS_PATH=/tmp/agenttrace-playwright \
   uv run python -m unittest discover -s tests -t .
 ```
 
-The canonical end-to-end test runs through Compose:
+Parent-authorized end-to-end acceptance uses already-running managed services,
+from the repository root:
 
 ```bash
-uv run --with 'psycopg[binary]>=3.2,<4' python integration/v3/canonical_scenario.py
+python3 integration/local/management.py accept --env-file <private-management-env>
 ```
 
 The retained browser-case fixture is
@@ -37,8 +41,7 @@ contract. See `../CONTRACT.md` for the API, event, and operation contracts.
 
 `upload_file` accepts one relative name, never a host path or caller-supplied
 bytes. Configure `LOOP_UPLOADS_DIR` as an absolute, link-free directory.
-Legacy `/sessions` and `/execute` read only
-`$LOOP_UPLOADS_DIR/{session_id}/`; Environment sessions read only
+Environment sessions and replay read only
 `$LOOP_UPLOADS_DIR/{environment_id}_g{profile_generation}/`.
 Provision creates the generation directory; reset/delete remove obsolete
 generation uploads without following links. Trusted staging services must put
@@ -79,23 +82,23 @@ not persisted.
 
 ### Internal HTTP Contract
 
-All `/environments/*` requests require
+All browser session/replay and `/environments/*` requests require
 `Authorization: Bearer <LOOP_WORKER_INTERNAL_TOKEN>`. Missing configuration is
 `503 internal_auth_unconfigured`; wrong/missing credentials are `401 unauthorized`.
 These routes are for the Control API, not direct browser access.
 
 | Method/Path | Request/Response |
 | --- | --- |
-| `POST /environments/{id}/provision` | `{profile_generation, fencing_token, policy?: {allowed_domains: [...]}}` -> metadata |
+| `POST /environments/{id}/provision` | `{project_id, profile_generation, fencing_token, policy?: {allowed_domains: [...]}}` -> metadata |
 | `GET /environments/{id}` | Metadata only, never a profile path/state or control URL |
 | `POST /environments/{id}/reset` | `{profile_generation, fencing_token}` -> metadata |
 | `DELETE /environments/{id}` | JSON body `{profile_generation, fencing_token}` -> deleted metadata |
-| `POST /sessions` | `{session_id, environment_id, profile_generation, fencing_token}` -> `{session_id: "bsess_..."}` |
-| `POST /execute` | `{session_id, case, environment_id, profile_generation, fencing_token}` -> `ExecutionResult` |
+| `POST /sessions` | Strict `{session_id, project_id, environment_id, profile_generation, fencing_token}` -> `{session_id: "bsess_..."}` |
+| `POST /execute` | Strict `{session_id, browser_session_id, case, project_id, environment_id, profile_generation, fencing_token}` -> `ExecutionResult` |
 | `GET /environments/{id}/sessions/{bsess}/screenshot` | Identity headers -> viewport `image/png`, `Cache-Control: no-store` |
 | `POST /environments/{id}/sessions/{bsess}/input` | Identity and one input action in JSON -> `{accepted: true}` |
 
-Metadata fields: `environment_id`, `profile_generation`, `fencing_token`,
+Metadata fields include `environment_id`, `project_id`, `profile_generation`, `fencing_token`,
 `state` (`ready`, `leased`, `deleted`), `policy`.
 HTTP errors use `{error, detail}`. Missing resources are `404`; stale,
 occupied or mismatched identities are `409 environment_conflict`; unverifiable
@@ -114,7 +117,10 @@ identities cannot be reprovisioned.
 
 Managed `/sessions/{bsess}/navigate`, `/act`, and `DELETE /sessions/{bsess}`
 require Bearer auth plus `X-Profile-Generation` and `X-Fencing-Token`.
-Screenshot uses these same headers. Input instead carries identity in JSON:
+Session actions also require `X-Project-Id` and `X-Environment-Id`.
+Screenshot uses the provider's project/generation/fencing headers and
+Environment/session route scope. Input uses `X-Project-Id` and optional matching
+`X-Environment-Id` headers, with generation/fencing/action in strict JSON:
 
 ```json
 {"profile_generation":1,"fencing_token":2,"action":"click","x":10,"y":20}
@@ -142,17 +148,18 @@ Reset discards old state, including in-flight writes serialized by the provider
 lock. A worker crash is not permission to replay external effects.
 
 Managed `/execute` requires Bearer authentication, the active lease's current
-identity and its domain `session_id`. Its guard spans the complete runner and
+complete body identity, domain `session_id` and held `browser_session_id`.
+Its guard spans the complete runner and
 context cleanup, so reset/close cannot race execution. Dry runs use a fresh
 context with no persistent profile loaded or saved, the Environment's domain
 policy, disabled downloads/service workers and the same generation upload
 namespace. Disallowed goto is a failed step with `domain_rejected`; intercepted
 redirects fail navigation. Omitting identity for an active managed domain
-session is rejected. Node `finish_case` must forward all three identity fields.
+session is rejected. Node `finish_case` must forward every identity field and
+the held handle; extra or partial identity fields are rejected.
 
-Legacy `/sessions` requests with just `session_id` and unbound `/execute` remain
-ephemeral/compatible; uploads are constrained even there. Keep the worker
-network-private: compatibility routes are not a public authentication surface.
+Unbound `/sessions` and `/execute` requests are rejected. Keep the worker
+network-private; provider credentials are not a public browser capability.
 PostgreSQL remains lease/Project ownership authority. The Control API owns
 one-time takeover URL issuance, expiry, replay protection, authorization and
 audit, and proxies screenshot/input without exposing worker addresses or

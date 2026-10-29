@@ -58,7 +58,7 @@ func run(args []string, stdout io.Writer) error {
 		return errors.New("PostgreSQL migration failed")
 	}
 	store := postgres.NewStore(pool)
-	store.SetManagementEnabled(true)
+
 	var domains []string
 	for _, domain := range strings.Split(os.Getenv("AGENTTRACE_BROWSER_ALLOWED_DOMAINS"), ",") {
 		if domain = strings.TrimSpace(domain); domain != "" {

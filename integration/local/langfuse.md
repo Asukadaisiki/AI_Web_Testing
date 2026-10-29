@@ -127,9 +127,9 @@ evidence and writes `verification.json` outside the workspace.
 Those synthetic trace/span writes are not actual Agent runs or SDK/UI acceptance.
 The first-loop SDK/UI acceptance must not call `verify` or fabricate traces.
 
-## First-Loop Binding
+## Management Binding
 
-The native operate driver supplies these five values privately to the Langfuse
+The native operate driver supplies these values privately to the Langfuse
 server for both build and up. They are server-only BFF configuration, never
 `NEXT_PUBLIC_*`, browser credentials, or values to paste into logs:
 
@@ -139,22 +139,26 @@ server for both build and up. They are server-only BFF configuration, never
 | `AGENTTRACE_BRIDGE_TOKEN` | Private bearer token shared with the Go API |
 | `AGENTTRACE_LANGFUSE_PROJECT_ID` | Authorized Langfuse project, `agenttrace-native-project` for this stack |
 | `AGENTTRACE_PROJECT_ID` | Bound AgentTrace project ID |
-| `AGENTTRACE_CONVERSATION_ID` | Bound AgentTrace conversation ID |
 
-The Go API must receive the same `AGENTTRACE_BRIDGE_TOKEN`,
-`AGENTTRACE_PROJECT_ID` and `AGENTTRACE_CONVERSATION_ID`; partial or mismatched
-bindings are not valid. The exporter must additionally receive
+The Go API must receive the same `AGENTTRACE_BRIDGE_TOKEN` and trusted durable
+Go/LF project binding; partial or mismatched bindings are not valid.
+Management is mandatory. The native application seed returns canonical IDs
+only into its child environment; it does not export them to another shell.
+Use the private seed-result handoff in `docs/management-runtime-setup.md` for
+the BFF and later acceptance. `AGENTTRACE_PROJECT_BINDINGS` JSON may explicitly
+map LF projects to Go projects. The exporter may additionally receive
 `AGENTTRACE_EXPORT_PROJECT_ID=<bound AgentTrace project ID>` to restrict ingestion
 to that project. This is distinct from `AGENTTRACE_LANGFUSE_PROJECT_ID`, which is
 the Langfuse destination project. The generated `agenttrace.env` below supplies
-destination credentials only, not the five BFF values or exporter project filter.
+destination credentials only, not the complete BFF values or exporter project filter.
 The launcher preserves privately supplied `AGENTTRACE_*` values; it does not
 generate or provision Go bindings.
 
-This first release binds one project and one conversation and uses
-installation-level Harnesses. In the bound Langfuse project, open **Agent runs**,
+The product selects Conversations dynamically and uses project Registry
+immutable Skill/Harness versions and reviewed MCP bindings. A fixed startup
+Conversation is not a BFF requirement. In the bound Langfuse project, open **Agent runs**,
 enter a prompt and optional URL, choose Runtime and Harness, and submit.
-Runtime chooses the execution engine; Harness chooses the installed behavior
+Runtime chooses the execution engine; Harness chooses the reviewed versioned behavior
 configuration. Observe real run events and completion; cancel an active run,
 rerun a failed run, and follow the native **Trace** link once actual SDK events
 have been ingested and exported. The optional URL is a run input, not a requirement

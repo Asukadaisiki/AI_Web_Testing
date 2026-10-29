@@ -3,14 +3,18 @@
 | 方法 | 路径 | body | 返回 |
 |---|---|---|---|
 | GET | `/health` | — | `{"status":"ok","artifacts_dir":"..."}` |
-| POST | `/sessions` | `{"session_id":"sess_..."}` | `{"session_id":"bsess_..."}` |
+| POST | `/sessions` | managed OpenSessionRequest | `{"session_id":"bsess_..."}` |
 | POST | `/sessions/{id}/navigate` | `{"url":"..."}` | Observation |
 | POST | `/sessions/{id}/act` | `{"action":"click"|"input","locator":{...},"postconditions":[...]}` | ActResponse |
 | DELETE | `/sessions/{id}` | — | `{"closed":true}` |
-| POST | `/execute` | `{"session_id":"sess_...","case":{...}}` | ExecutionResult |
+| POST | `/execute` | managed ExecuteRequest + held browser_session_id | ExecutionResult |
 
 路径里的 `{id}` 是**浏览器会话**句柄（`bsess_...`）；body 里的 `session_id` 是**领域会话**
 （`sess_...`，CONTRACT §9）。两者不是一回事：前者用完即弃，后者决定证据落哪个目录。
+
+All browser/provider routes require private bearer authentication. Session open and replay
+require project_id, environment_id, profile_generation and fencing_token; replay also
+requires the held browser_session_id. Session actions carry current lease headers.
 
 错误响应统一 `{"error":"<code>","detail":"<人类可读>"}`：会话不存在 404，case 非法 400
 （`error` 用 `CaseInvalid.code`，与 Go 侧 `internal/contract` 的错误码逐字一致），
@@ -92,15 +96,13 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def session_guard(request, session_id):
         session = manager.get(session_id)
-        if session.environment_id:
-            authenticate(request)
-            generation, token = session_identity(request)
-            async with manager.environments.guard(
-                session, generation, token, request.headers.get("x-environment-id"),
-                request.headers.get("x-project-id"),
-            ):
-                yield session
-        else:
+        if not session.environment_id:
+            raise ProviderError(409, "environment_conflict", "session is not Environment scoped")
+        generation, token = session_identity(request)
+        async with manager.environments.guard(
+            session, generation, token, request.headers.get("x-environment-id"),
+            request.headers.get("x-project-id"),
+        ):
             yield session
 
     @asynccontextmanager
@@ -115,8 +117,10 @@ def create_app() -> FastAPI:
     app.state.environment_provider = manager.environments
 
     @app.middleware("http")
-    async def protect_provider(request: Request, call_next):
-        if request.url.path == "/environments" or request.url.path.startswith("/environments/"):
+    async def protect_internal(request: Request, call_next):
+        path = request.url.path.rstrip("/")
+        if (path in ("/environments", "/sessions", "/execute")
+                or path.startswith(("/environments/", "/sessions/"))):
             try:
                 authenticate(request)
             except ProviderError as exc:
@@ -164,14 +168,10 @@ def create_app() -> FastAPI:
         return {"status": "ok", "artifacts_dir": str(artifacts_dir())}
 
     @app.post("/sessions")
-    async def create_session(body: OpenSessionRequest, request: Request) -> dict[str, str]:
+    async def create_session(body: OpenSessionRequest) -> dict[str, str]:
         # 返回的是浏览器会话句柄；body.session_id（领域会话）记在会话上，决定证据目录。
         manager.require_ready()
-        if body.environment_id:
-            authenticate(request)
-            session = await manager.environments.create(manager, body)
-        else:
-            session = await manager.create(body.session_id)
+        session = await manager.environments.create(manager, body)
         return {"session_id": session.browser_session_id}
 
     @app.post("/sessions/{session_id}/navigate")
@@ -240,28 +240,19 @@ def create_app() -> FastAPI:
         return {"accepted": True}
 
     @app.post("/execute")
-    async def execute(body: ExecuteRequest, request: Request) -> ExecutionResult:
+    async def execute(body: ExecuteRequest) -> ExecutionResult:
         # 先校验：契约非法一律 400，且不浪费一次浏览器启动
         case = validate_case(body.case)
         manager.require_ready()
-        if body.environment_id:
-            authenticate(request)
-            async with manager.environments.execution_guard(body) as session:
-                browser = await manager.browser()
-                return await run_case(
-                    case, browser=browser, session_id=body.session_id,
-                    environment_policy=session.environment_policy,
-                    upload_scope=f"{body.environment_id}_g{body.profile_generation}",
-                    initial_storage_state=session.initial_storage_state,
-                    on_cleanup_error=manager.mark_cleanup_uncertain,
-                )
-        if manager.environments.owns_domain_session(body.session_id):
-            raise ProviderError(400, "invalid_request", "managed execution requires Environment identity")
-        browser = await manager.browser()
-        return await run_case(
-            case, browser=browser, session_id=body.session_id,
-            on_cleanup_error=manager.mark_cleanup_uncertain,
-        )
+        async with manager.environments.execution_guard(body) as session:
+            browser = await manager.browser()
+            return await run_case(
+                case, browser=browser, session_id=body.session_id,
+                environment_policy=session.environment_policy,
+                upload_scope=f"{body.environment_id}_g{body.profile_generation}",
+                initial_storage_state=session.initial_storage_state,
+                on_cleanup_error=manager.mark_cleanup_uncertain,
+            )
 
     return app
 

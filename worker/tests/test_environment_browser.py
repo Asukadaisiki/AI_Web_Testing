@@ -329,7 +329,8 @@ class EnvironmentBrowserTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(health.json()["status"], "not_ready")
                 self.assertEqual((await self.client.post("/execute", json=payload)).status_code, 503)
                 self.assertEqual((await self.client.post("/sessions", json={
-                    "session_id": "sess_new",
+                    "session_id": "sess_new", "project_id": "prj_a",
+                    "environment_id": "env_a", "profile_generation": 1, "fencing_token": 2,
                 })).status_code, 503)
                 released = await self.client.delete(f"/sessions/{sid}", headers={
                     "X-Profile-Generation": "1", "X-Fencing-Token": "2",
@@ -343,6 +344,7 @@ class EnvironmentBrowserTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_managed_failed_dryrun_reopens_same_lease_for_repair(self):
         with LocalSite() as site:
+            self.client.headers["X-Project-ID"] = "prj_browser"
             provisioned = await self.client.post("/environments/env_a/provision", json={
                 "project_id": "prj_browser", "profile_generation": 1, "fencing_token": 1,
                 "policy": {"allowed_domains": ["127.0.0.1"]},

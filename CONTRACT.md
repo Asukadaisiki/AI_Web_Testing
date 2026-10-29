@@ -15,7 +15,7 @@ persistence or legacy session-control fallback.
 | PostgreSQL transactions and Trace projection | `backend/internal/postgres` |
 | Runtime checkpoints and shared SDK host execution | `backend/internal/runtime`, `backend/internal/piharness` |
 | SDK-free Runtime/Harness snapshots | `backend/internal/execution`, `pi-browser-harness/src/execution-spec.ts` |
-| Server-owned model defaults and safety policy | `backend/internal/agentprofile` |
+| Server-owned model defaults and safety policy | `backend/internal/config`, project Registry in `backend/internal/postgres` |
 | Browser case, observation, and execution types | `backend/internal/contract` |
 | Worker HTTP service and Playwright execution | `worker/loop_worker/main.py`, `runner.py` |
 | Cross-language browser fixture cases | `fixtures/contract/case_contract.json` |
@@ -27,15 +27,25 @@ together.
 
 ## Workspace, Run, and Delivery
 
-`POST /api/v1/conversations/{id}/messages` accepts a message with an
-idempotency key and returns `202` with stable `message_id` and `run_id`. Before
-returning, PostgreSQL atomically records canonical facts and an outbox envelope.
+`POST /api/v1/conversations/{id}/messages` accepts `content`, `runtime_id`,
+`harness_id` (immutable project version ID) and `idempotency_key`, returning
+`202` with stable `message_id` and `run_id`. Agent/model-only submissions are
+rejected. Management bridge authentication and explicit Go/LF project, actor
+and role scope are mandatory. PostgreSQL atomically resolves reviewed project
+versions and an owned ready Environment, stores the immutable specification
+and canonical facts, and appends the outbox command. Snapshotless/unfenced new
+work fails closed; historical facts remain inspectable.
 
 Kafka carries immutable envelopes on:
 
 - `agenttrace.run.commands.v1` for runtime commands;
 - `agenttrace.run.events.v1` for durable events;
 - `agenttrace.run.dlq.v1` for terminal delivery failures.
+- `agenttrace.environment.commands.v1` for managed lifecycle delivery.
+
+Native startup validates at least eight partitions for all four topics and
+defaults to four runtime command workers. It refuses undersized existing topics
+without altering metadata, offsets or partitions.
 
 Every consumer deduplicates by `event_id`. The runtime reloads its checkpoint
 from PostgreSQL after delivery or restart; a duplicate delivery must not create
@@ -51,10 +61,10 @@ slot remains occupied until `harness.released` confirms awaited resource cleanup
 
 Harness definitions supply prompts, skills, allowed tools, MCP descriptors and
 an objective completion policy independently of the Pi SDK and Langfuse. The
-default Pi browser harness force-loads browser-case-authoring and requires the
-latest complete browser replay to pass. A replacement Harness reports its own
-`succeeded` or `failed` verdict in `harness.settled`; old events without a verdict
-retain the browser-evidence fallback. Durable cancellation overrides either
+reviewed Pi browser harness loads snapshot-selected browser-case-authoring and
+requires the latest complete browser replay to pass. A selected Harness reports
+its required `succeeded` or `failed` verdict in `harness.settled`; missing verdict
+does not select a browser-evidence fallback. Durable cancellation overrides the
 verdict. Assistant prose alone does not determine success.
 
 ## Runtime and Harness catalog
@@ -64,14 +74,14 @@ verdict. Assistant prose alone does not determine success.
 local configuration and executable readiness; external provider reachability
 is checked by actual execution.
 
-In compatibility mode Harnesses use `GET/POST /api/v1/harnesses` and
-`GET/PUT/DELETE /api/v1/harnesses/{id}`. A snapshot contains `id`, `name`,
-`revision`, `system_prompt`, `skills` and `mcp`. PUT replaces the definition and
-increments its revision. Skill files have scoped relative paths. MCP descriptors
+Only project-scoped Registry routes publish/select immutable Harness and Skill
+versions. Global mutable Harness CRUD and agent discovery are retired.
+Snapshots contain selected identities, digests, system prompt, Skills and MCP.
+Skill files have scoped relative paths. MCP descriptors
 accept only reviewed deployed `capability`, validated `config` and scoped
 `secret_refs`; arbitrary command/args/env and `env:VARIABLE_NAME` are rejected.
 
-Management mode uses project-scoped immutable Skill and Harness versions,
+Management uses project-scoped immutable Skill and Harness versions,
 system-owned MCP versions and project bindings. All requests authenticate the
 server bridge and explicit project, Langfuse project, actor and role. Conversation
 and Environment ownership are checked at the API and provider boundaries.
@@ -82,7 +92,8 @@ Message submission accepts `runtime_id` and `harness_id` together. The server
 selects the model and persists the copied `execution` snapshot in the Run and
 queued command atomically. Management idempotency hashes the requested selection
 before resolution so a replay returns the original Run despite later registry
-changes. Existing Agent/model-only requests retain legacy behavior.
+changes. Replay is resolved before readiness checks and preserves the existing
+managed hash serialization and response identities.
 Run responses include a sanitized immutable snapshot with selected Runtime,
 version identities and digests. Rerun copies the source snapshot and uses the
 current ready Environment generation after explicit review or reset.
@@ -209,8 +220,13 @@ captcha.
 The worker receives:
 
 ```json
-{"session_id":"artifact_scope","case":{"case_version":"loop.case.v1"}}
+{"session_id":"run_...","browser_session_id":"bsess_...","project_id":"prj_...","environment_id":"env_...","profile_generation":1,"fencing_token":2,"case":{"case_version":"loop.case.v1"}}
 ```
+
+Browser open/replay requires complete strict body identity and internal Bearer
+authentication. Replay requires the held browser handle and the current project,
+Environment, generation and fencing token. No unbound ephemeral fallback is
+available. Runtime evidence writes require a current Lease/fencing identity.
 
 It returns an execution result with `passed`, `failed`, or `error`, per-step
 status, start time, duration, URLs before and after the action, evaluated
@@ -221,7 +237,8 @@ conditions, and structured errors. Error kinds include `target_not_found`,
 Each step's evidence can include a relative screenshot path, browser console
 entries, network entries, hit-test facts, and safe recovery attempts. Artifact
 paths are relative to the shared artifacts root and are exposed by the v3 API
-under `/artifacts/`; no repository or host absolute path is contractual.
+under authenticated, project-scoped `/artifacts/`; no repository or host
+absolute path is contractual. Management and the BFF retain that root URL.
 
 The v3 runtime persists operation output, artifact references, structured
 errors, attempts, and spans in PostgreSQL through
@@ -247,7 +264,10 @@ The runtime passes the current Run's latest user goal, public model reference
 and reasoning effort to the Harness. The selected official SDK owns the
 evolving model context, turns and tool dispatch. `AGENTTRACE_MODEL_PROVIDER` selects Pi's default
 real OpenAI-compatible `glm-5.3-flash` or the deterministic scripted fixture.
-Credentials remain in Runtime's environment.
+Credentials remain in Runtime's environment. Each Run explicitly selects its
+supported SDK and validated Harness snapshot. The Node process implements only
+the shared session-host protocol: no default-Pi, startup-module or disk-Skill
+fallback is executable.
 
 Each `pi.message.completed` may carry `input` with the actual transformed
 messages and paired `started_at`/`ended_at` UTC call times. Usage preserves
@@ -263,8 +283,9 @@ completed v3 runs to Langfuse. Its retry and DLQ contract is implemented in
 execution, local completion, or product reads.
 
 New producers publish `run.completed` with `{run_id, status, error?}` where
-status is `succeeded`, `failed` or `cancelled`. Legacy `runtime.completed` and
-`harness.completed` queued records are accepted only by the export migration
-reader. Durable completion and its outbox record are committed atomically.
+status is `succeeded`, `failed` or `cancelled`. Producers and consumers use only
+this canonical completion type; retired completion aliases are not executable.
+Historical rows and applied additive migrations remain untouched.
+Durable completion and its outbox record are committed atomically.
 Kafka Live Notifier writes disposable `run.events.available` Redis wakeups;
 SSE always emits persisted events identified by their PostgreSQL sequence.

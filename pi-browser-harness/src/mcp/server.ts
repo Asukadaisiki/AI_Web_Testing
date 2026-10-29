@@ -5,7 +5,6 @@ import type { Readable, Writable } from "node:stream";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { z } from "zod";
 
 import { BROWSER_TOOL_SCHEMAS } from "./schemas.js";
 import { encodeToolOutcome } from "./tool-result.js";
@@ -65,15 +64,7 @@ export function createBrowserMcpServer(
   let builderClosing: Promise<void> | undefined;
   let serverClosing: Promise<void> | undefined;
 
-  // SDK stdio close ignores child exit status. Hosts must await this acknowledgement
-  // before transport teardown to distinguish release from uncertain cleanup.
-  mcp.server.setRequestHandler(z.object({ method: z.literal("browser/close") }), async () => {
-    await closeBuilderOnce();
-    return { closed: true };
-  });
-
-  // Pi exposes managed MCP tools, but not arbitrary client requests. The harness
-  // hides this lifecycle alias from the model and calls it before SDK shutdown.
+  // Hosts await this hidden lifecycle tool before tearing down MCP transports.
   mcp.tool("close_session", "Acknowledge authoring browser cleanup", {}, async () => {
     await closeBuilderOnce();
     return {
@@ -177,17 +168,13 @@ export async function runStdioServer(options: StdioServerOptions = {}): Promise<
   const proc = options.process ?? process;
   const builder = options.builder ?? await CaseBuilder.create({
     worker: new WorkerClient(requiredEnv("AGENTTRACE_HARNESS_WORKER_URL"), {
-      ...(process.env.AGENTTRACE_BROWSER_PROVIDER_TOKEN ? {
-        providerToken: process.env.AGENTTRACE_BROWSER_PROVIDER_TOKEN,
-      } : {}),
-      ...(process.env.AGENTTRACE_HARNESS_ENVIRONMENT_ID ? {
-        environmentLease: {
-          project_id: requiredEnv("AGENTTRACE_HARNESS_PROJECT_ID"),
-          environment_id: requiredEnv("AGENTTRACE_HARNESS_ENVIRONMENT_ID"),
-          profile_generation: Number(requiredEnv("AGENTTRACE_HARNESS_PROFILE_GENERATION")),
-          fencing_token: Number(requiredEnv("AGENTTRACE_HARNESS_FENCING_TOKEN")),
-        },
-      } : {}),
+      providerToken: requiredEnv("AGENTTRACE_BROWSER_PROVIDER_TOKEN"),
+      environmentLease: {
+        project_id: requiredEnv("AGENTTRACE_HARNESS_PROJECT_ID"),
+        environment_id: requiredEnv("AGENTTRACE_HARNESS_ENVIRONMENT_ID"),
+        profile_generation: Number(requiredEnv("AGENTTRACE_HARNESS_PROFILE_GENERATION")),
+        fencing_token: Number(requiredEnv("AGENTTRACE_HARNESS_FENCING_TOKEN")),
+      },
     }),
     artifactScope: requiredEnv("AGENTTRACE_HARNESS_ARTIFACT_SCOPE"),
     goal: requiredEnv("AGENTTRACE_HARNESS_GOAL"),

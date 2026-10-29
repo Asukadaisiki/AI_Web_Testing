@@ -47,42 +47,6 @@ type CreateConversationParams struct {
 	CreatedBy string
 }
 
-// SubmitResponseParams describes a user response to a durable wait state.
-type SubmitResponseParams struct {
-	RunID          string
-	Kind           string
-	Content        string
-	IdempotencyKey string
-	Continuation   bool
-}
-
-func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
-	if s == nil || s.pool == nil {
-		return nil, errors.New("postgres store is not configured")
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, metadata, created_at, updated_at
-		FROM projects
-		ORDER BY created_at, id`)
-	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
-	}
-	defer rows.Close()
-
-	var projects []Project
-	for rows.Next() {
-		project, err := scanProject(rows)
-		if err != nil {
-			return nil, err
-		}
-		projects = append(projects, project)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate projects: %w", err)
-	}
-	return projects, nil
-}
-
 // GetProject returns the canonical project projection by ID.
 func (s *Store) GetProject(ctx context.Context, projectID string) (Project, error) {
 	if s == nil || s.pool == nil {
@@ -105,22 +69,7 @@ func (s *Store) CreateProject(ctx context.Context, p CreateProjectParams) (Proje
 	if strings.TrimSpace(p.Name) == "" {
 		return Project{}, errors.New("project name is required")
 	}
-	if s.ManagementEnabled() || p.LangfuseProjectID != "" {
-		return s.createBoundProject(ctx, p)
-	}
-	id, err := newID("prj")
-	if err != nil {
-		return Project{}, err
-	}
-	project, err := scanProject(s.pool.QueryRow(ctx, `
-		INSERT INTO projects (id, name, metadata)
-		VALUES ($1, $2, $3::jsonb)
-		RETURNING id, name, metadata, created_at, updated_at`,
-		id, p.Name, requiredJSON(p.Metadata, `{}`)))
-	if err != nil {
-		return Project{}, fmt.Errorf("create project: %w", err)
-	}
-	return project, nil
+	return s.createBoundProject(ctx, p)
 }
 
 func (s *Store) ListConversations(ctx context.Context, projectID string) ([]Conversation, error) {
@@ -166,14 +115,12 @@ func (s *Store) CreateConversation(ctx context.Context, p CreateConversationPara
 	if err := lockProject(ctx, tx, p.ProjectID); err != nil {
 		return Conversation{}, err
 	}
-	if s.ManagementEnabled() {
-		var active bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_bindings WHERE agenttrace_project_id = $1 AND status = 'active')`, p.ProjectID).Scan(&active); err != nil {
-			return Conversation{}, err
-		}
-		if !active {
-			return Conversation{}, ErrConflict
-		}
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_bindings WHERE agenttrace_project_id = $1 AND status = 'active')`, p.ProjectID).Scan(&active); err != nil {
+		return Conversation{}, err
+	}
+	if !active {
+		return Conversation{}, ErrConflict
 	}
 	id, err := newID("conv")
 	if err != nil {
@@ -187,10 +134,8 @@ func (s *Store) CreateConversation(ctx context.Context, p CreateConversationPara
 	if err != nil {
 		return Conversation{}, fmt.Errorf("create conversation: %w", err)
 	}
-	if s.ManagementEnabled() {
-		if err := createConversationEnvironment(ctx, tx, conversation, p.CreatedBy, s.defaultEnvironmentPolicy()); err != nil {
-			return Conversation{}, err
-		}
+	if err := createConversationEnvironment(ctx, tx, conversation, p.CreatedBy, s.defaultEnvironmentPolicy()); err != nil {
+		return Conversation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Conversation{}, fmt.Errorf("commit create conversation: %w", err)
@@ -534,140 +479,6 @@ func (s *Store) RequestCancel(ctx context.Context, runID string) error {
 	}
 	if err := appendRunEvent(ctx, tx, runID, "run.cancel.requested", map[string]string{"run_id": runID}); err != nil {
 		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// SubmitResponse persists a response and queues a continuation in one transaction.
-func (s *Store) SubmitResponse(ctx context.Context, p SubmitResponseParams) error {
-	if s == nil || s.pool == nil {
-		return errors.New("postgres store is not configured")
-	}
-	if strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.Kind) == "" ||
-		strings.TrimSpace(p.Content) == "" || strings.TrimSpace(p.IdempotencyKey) == "" {
-		return errors.New("run id, response kind, content, and idempotency key are required")
-	}
-	requestHash, err := payloadHash(p)
-	if err != nil {
-		return err
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin submit response: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var conversationID string
-	if err := tx.QueryRow(ctx, `SELECT conversation_id FROM runs WHERE id = $1`, p.RunID).Scan(&conversationID); errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("run %q: %w", p.RunID, ErrNotFound)
-	} else if err != nil {
-		return fmt.Errorf("read response run conversation: %w", err)
-	}
-	if _, err := lockConversation(ctx, tx, conversationID); err != nil {
-		return err
-	}
-	run, err := scanRun(tx.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id,
-		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
-		       status, specification, checkpoint_version,
-		       cancel_requested_at, started_at, finished_at, created_at, updated_at
-		FROM runs WHERE id = $1 FOR UPDATE`, p.RunID))
-	if err != nil {
-		return fmt.Errorf("lock run for response: %w", err)
-	}
-	idempotencyID, err := newID("idem")
-	if err != nil {
-		return err
-	}
-	tag, err := tx.Exec(ctx, `
-		INSERT INTO idempotency_keys (id, scope, key, request_hash, response)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb)
-		ON CONFLICT (scope, key) DO NOTHING`,
-		idempotencyID, "run-response:"+p.RunID, p.IdempotencyKey, requestHash)
-	if err != nil {
-		return fmt.Errorf("insert response idempotency key: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		var storedHash string
-		if err := tx.QueryRow(ctx, `
-			SELECT request_hash FROM idempotency_keys
-			WHERE scope = $1 AND key = $2
-			FOR UPDATE`, "run-response:"+p.RunID, p.IdempotencyKey).Scan(&storedHash); err != nil {
-			return fmt.Errorf("read response idempotency key: %w", err)
-		}
-		if storedHash != requestHash {
-			return ErrConflict
-		}
-		return tx.Commit(ctx)
-	}
-	if run.Status != domain.RunWaitingInput && run.Status != domain.RunWaitingApproval {
-		return ErrConflict
-	}
-	var ordinal int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(ordinal), 0) + 1
-		FROM messages WHERE conversation_id = $1`, run.ConversationID).Scan(&ordinal); err != nil {
-		return fmt.Errorf("next response message ordinal: %w", err)
-	}
-	messageID, err := newID("msg")
-	if err != nil {
-		return err
-	}
-	metadata, err := json.Marshal(map[string]string{
-		"response_kind": p.Kind,
-		"run_id":        p.RunID,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal response metadata: %w", err)
-	}
-	message, err := scanMessage(tx.QueryRow(ctx, `
-		INSERT INTO messages (id, conversation_id, ordinal, role, content, metadata)
-		VALUES ($1, $2, $3, 'user', $4, $5::jsonb)
-		RETURNING id, conversation_id, COALESCE(run_id, ''), ordinal, role, content, metadata, created_at`,
-		messageID, run.ConversationID, ordinal, p.Content, metadata))
-	if err != nil {
-		return fmt.Errorf("persist response message: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE runs SET status = 'running', updated_at = now()
-		WHERE id = $1`, run.ID); err != nil {
-		return fmt.Errorf("resume run after response: %w", err)
-	}
-	if err := appendRunEvent(ctx, tx, run.ID, "run.response.received", map[string]any{
-		"run_id": run.ID, "message_id": message.ID, "kind": p.Kind,
-	}); err != nil {
-		return err
-	}
-	var specification runSpecification
-	if err := json.Unmarshal(run.Specification, &specification); err != nil {
-		return fmt.Errorf("decode continuation specification: %w", err)
-	}
-	continuation := specification.Command
-	continuation.Messages = append(continuation.Messages, message)
-	continuation.CheckpointVersion = run.CheckpointVersion
-	envelopeID, err := newID("evt")
-	if err != nil {
-		return err
-	}
-	envelope := event.Envelope[event.RunCommand]{
-		SchemaVersion: "agenttrace.run-command.v1",
-		EventID:       envelopeID,
-		EventType:     "run.continuation.requested",
-		AggregateID:   run.ID,
-		CorrelationID: run.ID,
-		CausationID:   message.ID,
-		OccurredAt:    time.Now().UTC(),
-		Payload:       continuation,
-	}
-	hash, err := payloadHash(envelope)
-	if err != nil {
-		return err
-	}
-	inserted, err := insertOutbox(ctx, tx, envelopeID, runCommandsTopic, run.ID, envelope, hash)
-	if err != nil {
-		return err
-	}
-	if !inserted {
-		return ErrConflict
 	}
 	return tx.Commit(ctx)
 }

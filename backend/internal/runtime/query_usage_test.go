@@ -11,7 +11,7 @@ import (
 
 func TestSDKQueryUsagePersistsMultipleModelsWithoutInventingModelCalls(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
-	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "SDK query accounting"})
+	project, err := store.CreateProject(ctx, managedProjectParams(postgres.CreateProjectParams{Name: "SDK query accounting"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,17 +19,17 @@ func TestSDKQueryUsagePersistsMultipleModelsWithoutInventingModelCalls(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
-		ConversationID: conversation.ID, Content: "Answer", AgentID: "claude-code",
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, postgres.CreateMessageParams{
+		ConversationID: conversation.ID, Content: "Answer",
 		Model: event.ModelRef{Provider: "anthropic-compatible", Name: "main-model"}, IdempotencyKey: t.Name(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	traceStore := PostgresPiTraceStore{Store: store}
+	traceStore := PostgresPiTraceStore{Store: store, RuntimeWorkerID: "runtime"}
 	command := commandFor(run.ID)
 	command.ConversationID = conversation.ID
-	ref, err := traceStore.StartRun(ctx, command)
+	ref, err := traceStore.StartRun(ctx, managedFixtureCommand(t, ctx, traceStore, command))
 	if err != nil {
 		t.Fatal(err)
 	}

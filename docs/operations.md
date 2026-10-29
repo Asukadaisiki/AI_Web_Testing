@@ -1,220 +1,165 @@
 # Operations
 
-## Native local start
+## Native Startup
 
-Follow the dependency installation in `README.md`. PostgreSQL and Redis run as
-native services. Initialize the real Langfuse stack once, then start it:
+Follow [Management Runtime Setup](management-runtime-setup.md) before operating
+services. Management is mandatory; startup requires private bridge/provider
+tokens, matching worker token and existing LF project binding before build,
+data or service side effects. Use the existing private Langfuse deployment,
+not another setup invocation against retained state.
 
 ```bash
-export AGENTTRACE_LOCAL_STATE="$HOME/Library/Caches/agenttrace-native"
-export LANGFUSE_NATIVE_ROOT="$AGENTTRACE_LOCAL_STATE/langfuse"
-bash integration/local/langfuse.sh setup
-bash integration/local/langfuse.sh up
-set -a
-source "$LANGFUSE_NATIVE_ROOT/agenttrace.env"
-set +a
+# Load ignored application config and private existing LF destination settings.
 python3 integration/local/run.py --with-exporter
 ```
 
-The task console uses `http://127.0.0.1:5184`, API `8180`, Worker `8110`,
-fixture `8124`, and Langfuse `3300`. Native Kafka uses an isolated broker on
-`9192`; the runner creates eight-partition command, event and DLQ topics.
-PostgreSQL database `agenttrace_local` is created if absent. Redis notifications
-use database `3`. Override public configuration through environment variables;
-model credentials remain in ignored `.env`.
-Restarting with the same state directory preserves Kafka's cluster metadata
-and delivery offsets. Set `AGENTTRACE_LOCAL_STATE` consistently across restarts.
+Defaults: API `8180`, Worker `8110`, fixture `8124`, Langfuse `3300`, native Kafka
+`9192`, PG database `agenttrace_local` on `5432`, Redis DB `3`.
+HTTP/API overrides must agree. Real execution needs a configured official SDK;
+scripted is deterministic fixture execution, not real acceptance.
+Pi/Claude/Codex credentials stay in execution environment, not snapshots.
+Explicit environment overrides ignored `.env`, then native defaults.
 
-The model provider is explicit: `openai-compatible` selects real
-`glm-5.3-flash`, and `scripted` selects a fixture. A missing real model key
-fails clearly. API mode selection does not require that key. Runtime owns the
-provider credentials; request snapshots carry only public model identity and
-reasoning effort.
+Always use the same private persistent state, encrypted profile key/root and
+artifact root across restarts. Default state is the OS temp directory's
+`agenttrace-local`; use a persistent path for long-lived evidence. Native setup
+reuses `environment.key` (0600), rejects insecure/invalid keys and will not
+generate a replacement against retained profiles. Back up the key separately.
+Do not rotate/delete a key or reset uncertain identity as a startup repair.
 
-Ctrl-C joins the runner's children and stops only the process groups it started.
-PostgreSQL, Redis, pre-existing Kafka and Langfuse services remain untouched.
-Langfuse has its separate stop command:
+The launcher creates four eight-partition topics, including Environment
+commands, then verifies partition counts. Existing undersized topics fail;
+review ordering/topology before a deliberate operator upgrade. No automatic
+partition alteration or metadata/offset reset occurs. Runtime default group is
+`agenttrace-runtime-local` and concurrency is four. Do not share command topics
+between independent databases or launch duplicate stacks against active work.
 
-```bash
-bash integration/local/langfuse.sh down
-```
+Trusted seed runs before application children and reuses durable binding.
+Only child environment receives canonical IDs. Hand its private JSON result to
+the BFF/acceptance as described in setup; the BFF routes Conversations dynamically.
+Nonempty exporter project filter is replaced with the canonical Go project;
+empty/unset preserves all-project export. LF destination keys must match scope.
 
-The pinned upstream Langfuse worker can retain an open handle after logging
-`Shutdown complete, exiting process...`. The launcher reports this after its
-bounded stop wait and refuses to kill an unidentified process. If this occurs,
-inspect its private log and saved PID identity before releasing that owned
-process; existing PostgreSQL, Redis and application services stay running.
+Ctrl-C joins only this launcher's child groups; an occupied port is refusal,
+not permission to kill a listener. Existing PG/Redis/Kafka/LF processes stay
+untouched. A launcher child failure intentionally stops its remaining children.
+Before any parent-directed restart, verify actual ownership, quiescent Runs/
+leases/controls/delivery and preserved quarantine; do not assume old evidence
+proves present safety. LF has a separate ownership-aware launcher documented
+in [native Langfuse](../integration/local/langfuse.md). A bounded shutdown
+warning requires process/log inspection, not an unidentified kill.
 
-Runtime logs and artifacts live outside the repository in
-`$AGENTTRACE_LOCAL_STATE`, defaulting to the OS temporary directory's
-`agenttrace-local`. Set a persistent location for long-term evidence.
-Langfuse defaults to `/tmp/agenttrace-native/langfuse`; see
-`integration/local/langfuse.md` for persistent storage and owner login.
+## Auth And Evidence
 
-## Health and evidence
+Control API operations require Bearer plus Go/LF project, actor and role
+headers. Never place secrets in URLs or public bundles; credential-bearing
+acceptance requests refuse redirects and cross-origin forwarding.
+Health is a dependency probe, not execution/export/UI acceptance.
 
 ```bash
 curl -fsS http://127.0.0.1:8180/api/v1/health
 bash integration/local/langfuse.sh status
 ```
 
-Health returns `ok`, `degraded` or `down` and independent PostgreSQL, Kafka,
-Redis, Worker and Langfuse checks. PostgreSQL failure returns HTTP 503.
-Redis failure marks `mode: postgres_poll`; SSE continues from PostgreSQL.
-Langfuse health probes its actual web endpoint when configured. Exporter lag is
-checked separately, not inferred from web health.
+Health exposes independent dependency availability. PG is canonical;
+Redis degradation uses PostgreSQL polling for SSE. Exporter lag is separate
+from LF web health. Every durable event and outbox row commits together;
+Kafka consumers deduplicate delivery, terminal work does not recreate sessions.
+`run.completed` is the only completion type. Live notifier wakeups are
+disposable, persisted sequences determine SSE replay and Last-Event-ID.
+Trace and `/artifacts` reads remain authenticated/project-scoped.
 
-PostgreSQL is the authority for execution and evidence. Every durable event and
-outbox message is committed together. Kafka provides delivery and independent
-consumer progress. The `agenttrace-live-notifier` group writes expiring Redis
-wakeups; SSE fetches PostgreSQL events and uses their sequences as replay IDs.
-Redis does not supply a second execution history. Cancellation reads durable
-PostgreSQL state every 250 ms; no unused Redis leases or cancel hints remain.
-
-Inspect pending delivery without changing state:
+For read-only backlog inspection use private libpq environment (not DSN/
+password argv); scope any evidence query to owned canonical IDs:
 
 ```bash
-psql "postgresql://$(whoami)@127.0.0.1:5432/agenttrace_local" -c \
-  "SELECT topic, count(*) FROM outbox_events
-   WHERE published_at IS NULL GROUP BY topic;"
+psql --no-psqlrc -Atq -v ON_ERROR_STOP=1 -c \
+  "SELECT topic,count(*) FROM outbox_events WHERE published_at IS NULL GROUP BY topic"
 kafka-consumer-groups --bootstrap-server 127.0.0.1:9192 \
   --group agenttrace-runtime-local --describe
-kafka-consumer-groups --bootstrap-server 127.0.0.1:9192 \
-  --group agenttrace-live-notifier --describe
 ```
 
-Restart a stopped runtime through the same runner/configuration. Kafka redelivery
-uses the durable inbox; terminal Runs do not create another session. A host
-crash fails its active sessions; a later request can start a fresh host.
-Do not share one Kafka command topic between independently owned databases.
+## Registry And Recovery
 
-## Session boundaries and failures
+Manage immutable Skill/Harness versions and reviewed MCP bindings through
+Langfuse's project Registry. Only project-scoped routes publish/select them.
+Message creation requires explicit runtime/Harness version, content and
+idempotency key. Global mutable Harness and agent/model-only flows are gone.
+Existing Runs and failed-Run reruns keep their pinned snapshots after
+publish/revoke. Historical snapshotless facts remain inspectable but are not
+executable through a substitute Harness.
 
-Each Go runtime process owns one shared host, with isolated selected SDK
-sessions per Attempt. Pi, Claude Code and Codex adapters share the lifecycle
-contract and immutable Harness snapshots.
-Cancellation addresses both Run and Attempt, and the execution slot is released
-after awaited session/MCP cleanup. `AGENTTRACE_PI_HARNESS_TIMEOUT` bounds an
-Attempt; `AGENTTRACE_PI_HARNESS_TERMINATION_GRACE` bounds cleanup and shutdown.
-Cleanup timeout may terminate the shared host and affect sibling sessions.
+Runtime holds execution capacity until `harness.released` confirms joined
+SDK/MCP/browser cleanup. `AGENTTRACE_PI_HARNESS_TIMEOUT` bounds Attempts;
+`AGENTTRACE_PI_HARNESS_TERMINATION_GRACE` bounds cleanup. Failure can terminate
+the shared host and affect siblings. Missing cleanup acknowledgement retains
+private Attempt files. Inspect failed Run and private logs before file cleanup;
+independently detached descendants need explicit ownership inspection.
+First evidence-write failure cancels the session; external effects cannot be
+automatically undone.
 
-On the first failed evidence write, Runtime cancels the affected session,
-waits for cleanup and fails that Run. It does not keep performing unrecorded
-actions. Already completed external effects cannot be undone automatically;
-inspect the evidence and external state before a user rerun.
+Environment execution requires current Lease, project, generation and fencing.
+Browser provider affinity must remain stable; horizontal provider failover needs
+the shared encrypted root/key and reliable locking or a shared provider service.
+Expired uncertain execution stays lost/needs_review for explicit review/reset.
+Control takeover requires one-time capability, role authorization, expiry and
+audit. Never expose provider tokens or worker URLs as browser capabilities.
 
-Manage Harnesses in the workspace or `/api/v1/harnesses`. Definitions contain
-system prompt, Skills JSON and MCP JSON. Updates increment revisions; existing
-Runs and failed-Run reruns keep the previous snapshots. Environment references
-resolve in the execution host. Configure Claude and Codex credentials/base URL/
-model using `AGENTTRACE_CLAUDE_*` and `AGENTTRACE_CODEX_*`; consult `.env.example`.
-For a Responses provider without namespace tools, explicitly select
-`AGENTTRACE_CODEX_TOOL_FORMAT=flat-functions`; the default is `native`. The
-attempt-local provider adapter closes after the Codex process exits. Provider
-errors remain failed Runs and are not retried through a different SDK.
-Missing SDK or MCP shutdown acknowledgements retain the Attempt's private
-working files and prevent `harness.released`. Diagnose the failed Run and private
-runtime log before removing retained files. Direct SDK children and MCP
-transports are joined; independently detached descendants have no separate
-join acknowledgement.
+Use the authenticated UI or `Management.request` for cancellation, reset and
+failed-Run rerun. Rerun uses source-scoped idempotency and can repeat effects;
+repeated managed requests return original response identity before readiness
+checks. Conversation deletion returns accepted managed cleanup or conflict
+while Run/delivery/lease work remains; wait for the tombstone and Environment
+delete acknowledgement. It retains processed-command tombstones. Do not
+delete/reset shared databases, whole projects or profile roots as cleanup.
 
-Legacy Harness modules supply tools, prompts, skills and completion policy. Set
-`AGENTTRACE_HARNESS_MODULE` to a trusted local `.mjs` module or `file:` URL
-implementing `pi-browser-harness/src/harness-definition.ts`.
-Restart Runtime to select it. Generic requests need no browser address;
-the browser Harness validates its own Worker URL and artifact scope.
-The Runtime cannot infer success from a browser case or assistant prose.
+## Export
 
-## Langfuse export
-
-The shared `run.completed` contract carries Run ID, terminal status and optional
-error for success, failure and cancellation. Export is asynchronous and
-idempotent. Failure retries or durable DLQ handoff do not rewrite Run status.
-Inspect the exporter's log, `consumer_retry_counts`, DLQ outbox and independent
-Kafka group progress if a Trace is missing.
-
-Model observations use captured model input and measured call intervals.
-Token details preserve provider totals and cache tokens; unknown billed cost
-is omitted. Trace input is the current Run's actual goal, not future messages
-in its Conversation.
-The Pi SDK does not distinguish absent usage from an all-zero report.
-All-zero counts are therefore omitted; positive counts, including cache-only
-usage, remain available. This avoids presenting unavailable data as measured zero.
-Claude reports assistant-message output and cumulative query/model usage;
-Codex reports completed-turn output, usage and host-measured turn intervals.
-Missing per-call details remain unknown instead of fabricated.
-Claude's cumulative query usage is associated with the Run root and keyed by
-SDK result, provider and model. Langfuse preserves it in
-`agenttrace_sdk_query_usage` metadata on the Trace and root observation; it does
-not assign pipeline totals to an individual assistant GENERATION.
-
-## Rerun and deletion
-
-A user rerun creates a fresh Run from the failed Run's immutable specification,
-retaining source-message identity and recording its parent. It can repeat
-external effects. Repeating a rerun request with the same UUID key returns the
-same new Run:
-
-```bash
-curl -X POST http://127.0.0.1:8180/api/v1/runs/<failed-run-id>/reruns \
-  -H 'Content-Type: application/json' -d '{"idempotency_key":"<uuid>"}'
-```
-
-Conversation/project DELETE returns HTTP 204 idempotently, or HTTP 409 while
-there is active work, pending delivery or an unprocessed command.
-Deletion retains processed command tombstones so Kafka replay cannot recreate
-deleted work. Delete scoped projects through the API instead of resetting
-shared services.
+Export is asynchronous/idempotent and cannot rewrite terminal Run status.
+Inspect exporter private logs, retry/DLQ facts and independent group progress
+when a Trace is missing. Actual goal/context, reported usage and model
+evidence are canonical; unknown cost/timing/input stays unknown.
+Claude cumulative query/model totals belong to the Run root and LF metadata,
+not an individual GENERATION. Codex `flat-functions` is an explicit provider
+option preserving actual official SDK tools/results; native is the default.
+Provider failure is not retried through a different SDK.
 
 ## Verification
 
 ```bash
-AGENTTRACE_E2E_POSTGRES_DSN="postgresql://$(whoami)@127.0.0.1:5432/agenttrace_local" \
-python3 integration/local/acceptance.py \
-  --env-file "$LANGFUSE_NATIVE_ROOT/agenttrace.env"
+python3 -m unittest discover -s integration/local -p '*_test.py'
+node --test integration/local/langfuse.test.mjs
+python3 integration/local/management.py accept --env-file <private-management-env> \
+  --report <private-evidence.json>
 ```
 
-The separate `integration/local/composition.py` verifies the three official SDKs
-with common browser and generic Harnesses, failure, cancellation and snapshots.
-Use the Worker audit proxy instructions in README to capture actual release
-acknowledgements. `--resume-report` rechecks existing acceptance Runs and reruns
-only failed initial combinations, preserving their original evidence.
-If an adapter changed after a saved report, `--refresh-runtime <runtime-id>`
-with `--resume-report` creates fresh checks for that adapter and retains the
-previous execution IDs under `prior_runs`. Deleted Harness reruns still use
-their original snapshots.
+The first two are offline (Node 24); only test-owned temporary resources/children
+may be created. The third is parent-authorized live acceptance against existing
+services, performs tracked-resource writes and remains provisional without
+external UI/RBAC/fault evidence. `support.py` supplies env/PG/SSE/poll and tracked
+cleanup, no HTTP fallback or unbound run creator. Management supplies auth;
+SQL evidence is read-only by caller convention. Managed faults enforce read-only
+transactions/global deadline; owned infrastructure admin is intentionally separate.
 
-Acceptance creates its own project and retains sanitized evidence.
-It also downloads successful browser screenshots through the API and validates
-their PNG signatures and Run scope.
+Successful managed SDK cases compare scoped PG counts/single completion/
+published outbox, two authenticated SSE reads/reconnect and optional actual LF
+terminal correlation/available model inputs/usage. Detailed Redis TTL,
+command/inbox, fixed-model timing/name/goal and generic composition coverage is
+not all ported from retired suites. Parent final smoke checks password absence
+and real UI; do not claim identical old/new scope.
 
-For fault drills, start the test-only Worker audit proxy in a second terminal,
-then start the local runner with `AGENTTRACE_WORKER_URL=http://127.0.0.1:8111`.
-Keep the same application state and Langfuse environment:
+Finite `management_faults.py` requires isolated `agenttrace_test_*`, unique
+runtime owners, explicit provider capacity and finite budgets. Optional crash
+requires fresh owned binary PID mapping and signal authorization; never use
+the all-children native supervisor as a survivor fault stack. Quarantine is
+retained, not automatically reset. Cleanup restores only tracked drain state
+under a separate 30-second total budget.
+`infrastructure_faults.py` owns isolated test DB/processes and refuses shared
+service injection, exclusive-create collisions or unowned signaling. Source
+capture includes its imported support module.
 
-```bash
-python3 integration/local/worker_audit.py \
-  --log /tmp/agenttrace-native/worker-audit.jsonl
-# In the runner terminal:
-AGENTTRACE_WORKER_URL=http://127.0.0.1:8111 \
-python3 integration/local/run.py --with-exporter
-# Once the stack is ready:
-AGENTTRACE_WORKER_URL=http://127.0.0.1:8111 \
-python3 integration/local/faults.py \
-  --env-file /tmp/agenttrace-native/langfuse/agenttrace.env \
-  --worker-audit /tmp/agenttrace-native/worker-audit.jsonl \
-  --report /tmp/agenttrace-native/faults.json
-```
-
-The proxy records request metadata only. Drills create isolated Runs, inject
-a scoped event-write failure, start a separate API with unavailable Redis,
-and pause the identified native Kafka and Langfuse web processes temporarily.
-Finally blocks restore each fault. Restart the application with Worker URL
-`http://127.0.0.1:8110` after the drills and stop the audit proxy.
-
-Go destructive integration tests require a dedicated database named
-`agenttrace_test_*` and Redis database `15`; loopback Redis is accepted, while
-default Redis DB `0` and remote addresses are rejected. Run affected packages
-serially (`go test -p 1`) because several test helpers reset their own schema.
-Legacy `integration/v3` container scenarios remain available but are not the
-native acceptance path.
+Full Go/SDK Host/Worker, isolated PostgreSQL, deployed identity/restart and live
+acceptance are parent integration gates. Dated evidence retains historical
+scope. Dockerfiles are portable component builds with explicit commands;
+direct startup still needs trusted seed, managed secrets, reviewed resources
+and stable profile/artifact mounts, not another product deployment.

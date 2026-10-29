@@ -1,3 +1,4 @@
+import { genericExecution } from "./fixtures/selected-harness.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -18,6 +19,7 @@ import { serverMain, SessionCleanupError } from "../src/server.js";
 afterEach(() => vi.unstubAllEnvs());
 
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1",
   run_id: "claude-adapter-run", attempt_id: "claude-adapter-attempt", goal: "Verify the selected case",
   model: { provider: "anthropic-compatible", name: "claude-selected", reasoning_effort: "high" },

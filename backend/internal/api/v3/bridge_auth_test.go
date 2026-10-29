@@ -22,7 +22,7 @@ const testBridgeToken = "test-bridge-token"
 func bridgeTestConfig(repository Repository, dir, token, project, conversation string) ServerConfig {
 	return ServerConfig{
 		Repository: repository, ArtifactDir: dir,
-		BridgeToken: token, BridgeProjectID: project, BridgeConversationID: conversation,
+		BridgeToken: token, BridgeProjectID: project,
 		Health: HealthDependencies{Postgres: func(context.Context) error { return nil }},
 	}
 }
@@ -30,6 +30,8 @@ func bridgeTestConfig(repository Repository, dir, token, project, conversation s
 func bridgeRequest(t *testing.T, handler http.Handler, method, path, auth, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	setTestIdentity(req)
+	req.Header.Del("Authorization")
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
@@ -90,11 +92,11 @@ func TestBridgeAuthenticationAndExactHealthException(t *testing.T) {
 	}
 }
 
-func TestBridgeLegacyEmptyConfigurationIsUnchanged(t *testing.T) {
+func TestBridgeEmptyConfigurationFailsClosed(t *testing.T) {
 	handler := New(ServerConfig{Repository: ownedBridgeRepository()}).Handler()
 	for _, path := range []string{"/api/v1/runtimes", "/api/v1/projects", "/api/v1/agents"} {
-		if got := request(t, handler, "GET", path, ""); got.Code != 200 {
-			t.Errorf("legacy %s = %d, want 200", path, got.Code)
+		if got := request(t, handler, "GET", path, ""); got.Code != 503 {
+			t.Errorf("missing service token %s = %d, want 503", path, got.Code)
 		}
 	}
 }
@@ -112,7 +114,7 @@ func TestBridgeDuplicateAuthorizationIsRejectedBeforeOwnership(t *testing.T) {
 }
 
 func TestBridgePartialConfigurationFailsClosed(t *testing.T) {
-	for mask := 1; mask < 7; mask++ {
+	for mask := 0; mask < 8; mask += 2 {
 		t.Run(string(rune('0'+mask)), func(t *testing.T) {
 			values := []string{"", "", ""}
 			for index, value := range []string{testBridgeToken, "project_1", "conv_1"} {
@@ -145,9 +147,6 @@ func TestBridgeRouteAllowlist(t *testing.T) {
 	}{
 		{"GET", "/api/v1/projects"}, {"POST", "/api/v1/projects"},
 		{"DELETE", "/api/v1/projects/project_1"},
-		{"GET", "/api/v1/projects/project_1/conversations"},
-		{"POST", "/api/v1/projects/project_1/conversations"},
-		{"DELETE", "/api/v1/conversations/conv_1"},
 		{"GET", "/api/v1/agents"}, {"POST", "/api/v1/runs/run_1/responses"},
 		{"GET", "/api/v1/runs/run_1/evaluation"}, {"GET", "/unknown"},
 		{"POST", "/api/v1/runtimes"}, {"PATCH", "/api/v1/harnesses/harness_1"},
@@ -158,17 +157,17 @@ func TestBridgeRouteAllowlist(t *testing.T) {
 			t.Errorf("%s %s = %d, want 403", test.method, test.path, got.Code)
 		}
 	}
-	if repository.response.RunID != "" || len(repository.deletedConversationIDs) != 0 || len(repository.deletedProjectIDs) != 0 {
+	if repository.message.ConversationID != "" || len(repository.deletedConversationIDs) != 0 || len(repository.deletedProjectIDs) != 0 {
 		t.Fatal("denied route mutated repository")
 	}
 	for _, test := range []struct {
 		method, path string
 		want         int
 	}{
-		{"GET", "/api/v1/runtimes", 200}, {"GET", "/api/v1/harnesses", 503},
-		{"GET", "/api/v1/harnesses/harness_1", 503},
-		{"POST", "/api/v1/harnesses", 503}, {"PUT", "/api/v1/harnesses/harness_1", 503},
-		{"DELETE", "/api/v1/harnesses/harness_1", 503},
+		{"GET", "/api/v1/runtimes", 200}, {"GET", "/api/v1/harnesses", 403},
+		{"GET", "/api/v1/harnesses/harness_1", 403},
+		{"POST", "/api/v1/harnesses", 403}, {"PUT", "/api/v1/harnesses/harness_1", 403},
+		{"DELETE", "/api/v1/harnesses/harness_1", 403},
 		{"GET", "/api/v1/conversations/conv_1", 200}, {"POST", "/api/v1/conversations/conv_1/messages", 400},
 		{"GET", "/api/v1/runs/run_1", 200}, {"GET", "/api/v1/runs/run_1/trace", 200},
 		{"GET", "/api/v1/runs/run_1/events", 503},
@@ -225,6 +224,7 @@ func TestBridgeEventsOwnershipBeforeSSEHeaders(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			req := httptest.NewRequest("GET", "/api/v1/runs/run_1/events", nil).WithContext(ctx)
+			setTestIdentity(req)
 			req.Header.Set("Authorization", "Bearer "+testBridgeToken)
 			recorder := httptest.NewRecorder()
 			New(cfg).Handler().ServeHTTP(recorder, req)

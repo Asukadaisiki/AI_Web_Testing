@@ -38,24 +38,9 @@ export interface PiSessionDeps {
   signal?: AbortSignal;
 }
 
-export interface BrowserSessionDeps extends PiSessionDeps {
-  mcpChildPath?: string;
-}
-
 export interface PiSession extends ExecutionSession {
   getActiveToolNames(): string[];
   getVerdict(): "succeeded" | "failed";
-  /** Legacy synchronous SDK disposal; owners must await close() for resource release. */
-  dispose(): void;
-}
-
-export type BrowserSession = PiSession;
-
-export async function createBrowserSession(
-  request: RunRequest, deps: BrowserSessionDeps,
-): Promise<BrowserSession> {
-  const { createBrowserHarnessDefinition } = await import("./browser-harness.js");
-  return createPiSession(request, deps, createBrowserHarnessDefinition(deps.mcpChildPath));
 }
 
 /** Adapts a selected harness to Pi. All behavior specific to tools lives in its definition. */
@@ -217,7 +202,7 @@ export async function createPiSession(
               .filter((block) => block.type === "text")
               .map((block) => block.text).join("\n") || `MCP cleanup failed: ${name}`);
           }
-          // Preserve the SDK envelope and injected legacy definitions' result shape.
+          // Preserve the SDK's complete MCP CallToolResult envelope for cleanup hooks.
           return result.structuredContent;
         })();
         hostCalls.set(name, calling);
@@ -338,7 +323,7 @@ export async function createPiSession(
     return {
       prompt: (goal) => running = session.prompt(definition.formatPrompt?.(goal) ?? goal),
       abort,
-      close, dispose,
+      close,
       getActiveToolNames: () => session.getActiveToolNames(),
       getVerdict: () => verdict,
     };

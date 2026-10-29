@@ -9,6 +9,7 @@ import (
 func TestLoadBridgeConfiguration(t *testing.T) {
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://localhost/agenttrace")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "provider-token")
 	for mask := 0; mask < 8; mask++ {
 		t.Run(string(rune('0'+mask)), func(t *testing.T) {
 			for index, key := range []string{"AGENTTRACE_BRIDGE_TOKEN", "AGENTTRACE_PROJECT_ID", "AGENTTRACE_CONVERSATION_ID"} {
@@ -19,7 +20,7 @@ func TestLoadBridgeConfiguration(t *testing.T) {
 				t.Setenv(key, value)
 			}
 			cfg, err := Load()
-			if mask != 0 && mask != 7 {
+			if mask&1 == 0 {
 				if err == nil {
 					t.Fatal("partial bridge configuration accepted")
 				}
@@ -31,10 +32,10 @@ func TestLoadBridgeConfiguration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for index, value := range []string{cfg.BridgeToken, cfg.BridgeProjectID, cfg.BridgeConversationID} {
+			for index, value := range []string{cfg.BridgeToken, cfg.BridgeProjectID} {
 				want := ""
-				if mask == 7 {
-					want = []string{"test-bridge-token", "project_1", "conv_1"}[index]
+				if mask&(1<<index) != 0 {
+					want = []string{"test-bridge-token", "project_1"}[index]
 				}
 				if value != want {
 					t.Errorf("bridge field %d was not loaded", index)
@@ -45,6 +46,8 @@ func TestLoadBridgeConfiguration(t *testing.T) {
 }
 
 func TestLoadExporterProjectFilter(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	setValidExporterEnvironment(t)
 	for _, value := range []string{"", " project_1 "} {
 		t.Setenv("AGENTTRACE_EXPORT_PROJECT_ID", value)
@@ -67,6 +70,8 @@ func TestLoadRequiresPostgresAndKafka(t *testing.T) {
 }
 
 func TestLoadAllowsRedisToBeDisabled(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
 	t.Setenv("AGENTTRACE_REDIS_ADDR", "")
@@ -80,6 +85,8 @@ func TestLoadAllowsRedisToBeDisabled(t *testing.T) {
 }
 
 func TestLoadUsesRunTopicDefaults(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
 	t.Setenv("AGENTTRACE_KAFKA_COMMAND_TOPIC", "")
@@ -103,6 +110,8 @@ func TestLoadUsesRunTopicDefaults(t *testing.T) {
 }
 
 func TestLoadUsesConfiguredOpenAICompatibleModelDefaults(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
 	t.Setenv("AGENTTRACE_MODEL_BASE_URL", "")
@@ -123,6 +132,8 @@ func TestLoadUsesConfiguredOpenAICompatibleModelDefaults(t *testing.T) {
 }
 
 func TestLoadModelProviderIsExplicitAndIndependentOfCredentials(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://localhost/agenttrace")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
 	t.Setenv("AGENTTRACE_MODEL_API_KEY", "")
@@ -146,6 +157,8 @@ func TestLoadModelProviderIsExplicitAndIndependentOfCredentials(t *testing.T) {
 }
 
 func TestLoadExporterDisabledRequiresNoDependenciesOrCredentials(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_LANGFUSE_ENABLED", "false")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "")
@@ -163,6 +176,8 @@ func TestLoadExporterDisabledRequiresNoDependenciesOrCredentials(t *testing.T) {
 }
 
 func TestLoadExporterEnabledValidatesProviderConfiguration(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	setValidExporterEnvironment(t)
 
 	for _, test := range []struct {
@@ -184,6 +199,8 @@ func TestLoadExporterEnabledValidatesProviderConfiguration(t *testing.T) {
 }
 
 func TestLoadExporterEnabledUsesExactTopicsAndRedactionFields(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	setValidExporterEnvironment(t)
 	t.Setenv("AGENTTRACE_LANGFUSE_REDACT_FIELDS", "authorization, password,api_key")
 	t.Setenv("AGENTTRACE_LANGFUSE_MAX_ATTEMPTS", "4")
@@ -212,6 +229,8 @@ func TestLoadExporterEnabledUsesExactTopicsAndRedactionFields(t *testing.T) {
 }
 
 func TestLoadExporterDefaultsAndValidatesMaximumRequestBytes(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	setValidExporterEnvironment(t)
 	t.Setenv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", "")
 
@@ -230,6 +249,8 @@ func TestLoadExporterDefaultsAndValidatesMaximumRequestBytes(t *testing.T) {
 }
 
 func TestLoadUsesPiHarnessDefaults(t *testing.T) {
+	t.Setenv("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "test-token")
+	t.Setenv("AGENTTRACE_BRIDGE_TOKEN", "test-token")
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
 	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
 	t.Setenv("AGENTTRACE_PI_HARNESS_COMMAND", "")

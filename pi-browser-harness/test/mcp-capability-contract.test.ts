@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseExecutionSpec } from "../src/execution-spec.js";
 import { prepareHarnessResources } from "../src/harness-resources.js";
 import type { RunRequest } from "../src/run-protocol.js";
+import { environmentLease, browserChildEnv } from "./fixtures/selected-harness.js";
 
 const spec = (server: unknown) => ({
   runtime_id: "pi",
@@ -57,6 +58,7 @@ describe("public MCP capability contract", () => {
 
   it("resolves the deployed browser capability from host request, not MCP name or public paths", async () => {
     const request = {
+      ...environmentLease,
       protocol_version: "pi-browser-harness.v1", run_id: "run", attempt_id: "attempt",
       goal: "Discuss {{unknown}} syntax", worker_url: "http://127.0.0.1:8080", artifact_scope: "run/attempt",
       model: { provider: "scripted", name: "test", reasoning_effort: "off" },
@@ -68,6 +70,7 @@ describe("public MCP capability contract", () => {
         name: "browser-harness", command: process.execPath,
         args: [fileURLToPath(new URL("../src/mcp/server.js", import.meta.url))],
         env: {
+          ...browserChildEnv,
           AGENTTRACE_HARNESS_WORKER_URL: request.worker_url,
           AGENTTRACE_HARNESS_ARTIFACT_SCOPE: request.artifact_scope,
           AGENTTRACE_HARNESS_GOAL: request.goal,

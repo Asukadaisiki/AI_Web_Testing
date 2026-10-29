@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/jackc/pgx/v5"
 )
@@ -16,49 +15,6 @@ import (
 type ConsumerRetryIncrement struct {
 	Attempts     int
 	DLQHandedOff bool
-}
-
-// LoadRunCommand returns the immutable command stored with a run.
-func (s *Store) LoadRunCommand(ctx context.Context, runID string) (domain.Run, event.RunCommand, error) {
-	if s == nil || s.pool == nil {
-		return domain.Run{}, event.RunCommand{}, errors.New("postgres store is not configured")
-	}
-	run, err := scanRun(s.pool.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id,
-		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
-		       status, specification, checkpoint_version,
-		       cancel_requested_at, started_at, finished_at, created_at, updated_at
-		FROM runs WHERE id = $1`, runID))
-	if err != nil {
-		return domain.Run{}, event.RunCommand{}, fmt.Errorf("load runtime run: %w", err)
-	}
-	var specification runSpecification
-	if err := json.Unmarshal(run.Specification, &specification); err != nil {
-		return domain.Run{}, event.RunCommand{}, fmt.Errorf("decode run specification: %w", err)
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, COALESCE(run_id, ''), ordinal, role, content, metadata, created_at
-		FROM messages
-		WHERE conversation_id = $1
-		  AND metadata ->> 'run_id' = $2
-		ORDER BY ordinal ASC`,
-		run.ConversationID, runID,
-	)
-	if err != nil {
-		return domain.Run{}, event.RunCommand{}, fmt.Errorf("load persisted run responses: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		message, err := scanMessage(rows)
-		if err != nil {
-			return domain.Run{}, event.RunCommand{}, err
-		}
-		specification.Command.Messages = append(specification.Command.Messages, message)
-	}
-	if err := rows.Err(); err != nil {
-		return domain.Run{}, event.RunCommand{}, fmt.Errorf("iterate persisted run responses: %w", err)
-	}
-	return run, specification.Command, nil
 }
 
 // ListRunEvents returns the durable event stream in replay order.
@@ -342,133 +298,6 @@ func (s *Store) HasConsumerRetryDLQHandoff(ctx context.Context, outboxEventID st
 		return false, fmt.Errorf("check consumer retry DLQ handoff: %w", err)
 	}
 	return handedOff, nil
-}
-
-// FinishRun atomically records terminal state, a durable event, and its outbox row.
-func (s *Store) FinishRun(
-	ctx context.Context,
-	runID string,
-	status domain.RunStatus,
-	runError json.RawMessage,
-	assistant string,
-	envelope event.Envelope[json.RawMessage],
-) error {
-	if s == nil || s.pool == nil {
-		return errors.New("postgres store is not configured")
-	}
-	if err := envelope.Validate(); err != nil {
-		return fmt.Errorf("validate completion event: %w", err)
-	}
-	hash, err := payloadHash(envelope)
-	if err != nil {
-		return err
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin complete run: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	existingHash, err := outboxPayloadHash(ctx, tx, envelope.EventID)
-	if err == nil {
-		if existingHash != hash {
-			return ErrConflict
-		}
-		return tx.Commit(ctx)
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return err
-	}
-
-	var conversationID string
-	if err := tx.QueryRow(ctx, `
-		SELECT conversation_id
-		FROM runs
-		WHERE id = $1`, runID).Scan(&conversationID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("load completion conversation: %w", err)
-	}
-	if _, err := lockConversation(ctx, tx, conversationID); err != nil {
-		return err
-	}
-	var lockedConversationID string
-	var existing domain.RunStatus
-	if err := tx.QueryRow(ctx, `
-		SELECT conversation_id, status
-		FROM runs
-		WHERE id = $1
-		FOR UPDATE`, runID).Scan(&lockedConversationID, &existing); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("lock run for completion: %w", err)
-	}
-	if lockedConversationID != conversationID {
-		return ErrConflict
-	}
-	if existing == domain.RunSucceeded || existing == domain.RunFailed || existing == domain.RunCancelled {
-		if existing != status {
-			return ErrConflict
-		}
-		return tx.Commit(ctx)
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE runs
-		SET status = $2, error = $3::jsonb, finished_at = now(), updated_at = now()
-		WHERE id = $1`,
-		runID, status, nullableJSON(runError))
-	if err != nil {
-		return fmt.Errorf("finish run: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE spans
-		SET status = $2, ended_at = now(), updated_at = now()
-		WHERE run_id = $1
-		  AND kind = 'run'
-		  AND ended_at IS NULL`,
-		runID, status); err != nil {
-		return fmt.Errorf("finish trace root: %w", err)
-	}
-	if err := appendAssistantMessage(ctx, tx, conversationID, runID, assistant); err != nil {
-		return err
-	}
-	var seq int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = $1`, runID).Scan(&seq); err != nil {
-		return fmt.Errorf("next completion event sequence: %w", err)
-	}
-	payload, err := json.Marshal(envelope)
-	if err != nil {
-		return fmt.Errorf("marshal completion event: %w", err)
-	}
-	rowID, err := newID("rev")
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO run_events (id, run_id, seq, event_type, payload, occurred_at)
-		VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
-		rowID, runID, seq, envelope.EventType, payload, envelope.OccurredAt,
-	); err != nil {
-		return fmt.Errorf("insert completion event: %w", err)
-	}
-	inserted, err := insertOutbox(ctx, tx, envelope.EventID, runEventsTopic, runID, envelope, hash)
-	if err != nil {
-		return err
-	}
-	if !inserted {
-		return ErrConflict
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit completion: %w", err)
-	}
-	return nil
 }
 
 func appendAssistantMessage(ctx context.Context, tx pgx.Tx, conversationID, runID, content string) error {

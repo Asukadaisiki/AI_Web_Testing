@@ -9,6 +9,7 @@ import json
 import os
 import getpass
 from pathlib import Path
+import re
 import secrets
 import signal
 import socket
@@ -16,21 +17,16 @@ import subprocess
 import tempfile
 import time
 import urllib.request
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import urlparse
 import uuid
+
+from support import load_environment, pg_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def environment() -> dict[str, str]:
-    env = dict(os.environ)
-    # Local credentials stay in the ignored .env; no values are printed.
-    source = ROOT / ".env"
-    if source.exists():
-        for line in source.read_text().splitlines():
-            if line.strip() and not line.lstrip().startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                env.setdefault(key.strip(), value.strip().strip("'\""))
+    env = load_environment([ROOT / ".env"])
     overrides = {
         "AGENTTRACE_POSTGRES_DSN": f"postgresql://{getpass.getuser()}@127.0.0.1:5432/agenttrace_local?sslmode=disable",
         "AGENTTRACE_KAFKA_BROKERS": "127.0.0.1:9192",
@@ -45,15 +41,19 @@ def environment() -> dict[str, str]:
         "AGENTTRACE_PI_HARNESS_DIR": str(ROOT),
         "AGENTTRACE_BUILTIN_HARNESS_DIR": str(ROOT / "pi-browser-harness/resources"),
         "AGENTTRACE_BUILTIN_MCP_ENTRY": str(ROOT / "pi-browser-harness/dist/mcp/server.js"),
-        "AGENTTRACE_API_URL": "http://127.0.0.1:8180",
     }
     for key, value in overrides.items():
         env.setdefault(key, value)
+    address = env["AGENTTRACE_HTTP_ADDR"]
+    api = "http://" + (address if not address.startswith(":") else "127.0.0.1" + address)
+    env.setdefault("AGENTTRACE_API_URL", api)
+    if env["AGENTTRACE_API_URL"].rstrip("/") != api:
+        raise SystemExit("AGENTTRACE_API_URL must agree with AGENTTRACE_HTTP_ADDR")
     state = local_state(env)
+    configure_management(env, state)
     state.mkdir(parents=True, exist_ok=True)
     env.setdefault("AGENTTRACE_ARTIFACT_DIR", str(state / "artifacts"))
     env["LOOP_ARTIFACTS_DIR"] = env["AGENTTRACE_ARTIFACT_DIR"]
-    configure_management(env, state)
     return env
 
 
@@ -61,18 +61,14 @@ def local_state(env: dict[str, str]) -> Path:
     return Path(env.get("AGENTTRACE_LOCAL_STATE", str(Path(tempfile.gettempdir()) / "agenttrace-local")))
 
 
-def management_enabled(env: dict[str, str]) -> bool:
-    return env.get("AGENTTRACE_MANAGEMENT_ENABLED", "").lower() == "true"
-
-
 def configure_management(env: dict[str, str], state: Path) -> None:
-    if not management_enabled(env):
-        return
     if not env.get("AGENTTRACE_BRIDGE_TOKEN", "").strip():
-        raise SystemExit("AGENTTRACE_BRIDGE_TOKEN is required in management mode")
+        raise SystemExit("AGENTTRACE_BRIDGE_TOKEN is required")
     token = env.get("AGENTTRACE_BROWSER_PROVIDER_TOKEN", "").strip()
     if not token:
-        raise SystemExit("AGENTTRACE_BROWSER_PROVIDER_TOKEN is required in management mode")
+        raise SystemExit("AGENTTRACE_BROWSER_PROVIDER_TOKEN is required")
+    if not env.get("AGENTTRACE_LANGFUSE_PROJECT_ID", "").strip():
+        raise SystemExit("AGENTTRACE_LANGFUSE_PROJECT_ID is required for trusted startup bootstrap")
     if env.get("LOOP_WORKER_INTERNAL_TOKEN") and env["LOOP_WORKER_INTERNAL_TOKEN"] != token:
         raise SystemExit("Browser provider and worker internal tokens must match")
     env["LOOP_WORKER_INTERNAL_TOKEN"] = token
@@ -83,6 +79,9 @@ def configure_management(env: dict[str, str], state: Path) -> None:
         env["AGENTTRACE_LANGFUSE_BASE_URL"] = "http://127.0.0.1:3300"
     key = env.get("LOOP_ENVIRONMENT_ENCRYPTION_KEY", "")
     if not key:
+        profiles = Path(env["LOOP_ENVIRONMENTS_DIR"])
+        if not (state / "environment.key").exists() and profiles.exists() and any(profiles.iterdir()):
+            raise SystemExit("Retained profiles require their existing environment encryption key")
         state.mkdir(parents=True, exist_ok=True)
         path = state / "environment.key"
         try:
@@ -119,9 +118,6 @@ def service_plan(env: dict[str, str]):
         ("api", ["go", "run", "./cmd/agenttrace-api"], ROOT / "backend", api + "/api/v1/health"),
         ("runtime", ["go", "run", "./cmd/agenttrace-runtime"], ROOT / "backend", None),
     ]
-    if not management_enabled(env):
-        port = env.get("AGENTTRACE_LOCAL_WEB_PORT", "5184")
-        services.append(("web", ["npm", "run", "dev", "--", "--port", port], ROOT / "web", f"http://127.0.0.1:{port}"))
     return services
 
 
@@ -131,7 +127,20 @@ def kafka_topics(env: dict[str, str]) -> tuple[str, ...]:
         ("AGENTTRACE_KAFKA_EVENT_TOPIC", "agenttrace.run.events.v1"),
         ("AGENTTRACE_KAFKA_DLQ_TOPIC", "agenttrace.run.dlq.v1"),
     ))
-    return topics + (("agenttrace.environment.commands.v1",) if management_enabled(env) else ())
+    return topics + ("agenttrace.environment.commands.v1",)
+
+
+def configure_kafka_topic(topic: str, env: dict[str, str]) -> None:
+    broker = env.get("AGENTTRACE_KAFKA_BROKERS", "127.0.0.1:9192")
+    subprocess.run(["kafka-topics", "--bootstrap-server", broker, "--create", "--if-not-exists",
+                    "--topic", topic, "--partitions", "8", "--replication-factor", "1"],
+                   check=True, env=env, stdout=subprocess.DEVNULL, timeout=30)
+    result = subprocess.run(["kafka-topics", "--bootstrap-server", broker, "--describe",
+                             "--topic", topic], check=True, env=env, capture_output=True,
+                            text=True, timeout=30)
+    counts = re.findall(r"\bPartitionCount:\s*(\d+)", result.stdout)
+    if len(counts) != 1 or int(counts[0]) < 8:
+        raise RuntimeError("Kafka topic requires at least eight partitions; an operator must review any upgrade")
 
 
 def seed_management(env: dict[str, str]) -> dict:
@@ -146,6 +155,8 @@ def seed_management(env: dict[str, str]) -> dict:
         result = json.loads(seeded.stdout)
         env["AGENTTRACE_PROJECT_ID"] = result["project_id"]
         env["AGENTTRACE_CONVERSATION_ID"] = result["conversation_id"]
+        if env.get("AGENTTRACE_EXPORT_PROJECT_ID"):
+            env["AGENTTRACE_EXPORT_PROJECT_ID"] = result["project_id"]
     except (ValueError, KeyError):
         raise RuntimeError("management seed returned invalid canonical IDs") from None
     return result
@@ -166,16 +177,8 @@ def wait_http(url: str, child: subprocess.Popen, timeout: int = 60) -> None:
 
 
 def postgres_environment(env: dict[str, str], dsn: str) -> dict[str, str]:
-    parsed = urlparse(dsn)
-    result = dict(env)
-    result.update(PGHOST=parsed.hostname or "127.0.0.1", PGPORT=str(parsed.port or 5432),
-                  PGUSER=unquote(parsed.username or getpass.getuser()), PGDATABASE="postgres")
-    if parsed.password is not None:
-        result["PGPASSWORD"] = unquote(parsed.password)
-    for option, variable in (("sslmode", "PGSSLMODE"), ("sslrootcert", "PGSSLROOTCERT")):
-        value = parse_qs(parsed.query).get(option)
-        if value:
-            result[variable] = value[-1]
+    result = pg_environment(dsn, env)
+    result["PGDATABASE"] = "postgres"
     return result
 
 
@@ -194,13 +197,10 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
     env = environment()
-    managed = management_enabled(env)
-    if managed and not env.get("AGENTTRACE_LANGFUSE_PROJECT_ID"):
-        raise SystemExit("AGENTTRACE_LANGFUSE_PROJECT_ID is required for management bootstrap")
     sdk_keys = ("AGENTTRACE_MODEL_API_KEY", "AGENTTRACE_CLAUDE_API_KEY", "AGENTTRACE_CODEX_API_KEY")
     if env["AGENTTRACE_MODEL_PROVIDER"] != "scripted" and not (
-            any(env.get(key) for key in sdk_keys) if managed else env.get("AGENTTRACE_MODEL_API_KEY")):
-        raise SystemExit("AGENTTRACE_MODEL_API_KEY is required for real execution")
+            any(env.get(key) for key in sdk_keys)):
+        raise SystemExit("A configured Pi, Claude Code or Codex SDK key is required for real execution")
     if args.with_exporter and not all(env.get(key) for key in (
             "AGENTTRACE_LANGFUSE_BASE_URL", "AGENTTRACE_LANGFUSE_PUBLIC_KEY",
             "AGENTTRACE_LANGFUSE_SECRET_KEY")):
@@ -276,9 +276,8 @@ def main() -> None:
                     except OSError:
                         time.sleep(.2)
         for topic in kafka_topics(env):
-            subprocess.run(["kafka-topics", "--bootstrap-server", env["AGENTTRACE_KAFKA_BROKERS"], "--create", "--if-not-exists", "--topic", topic, "--partitions", "8", "--replication-factor", "1"], check=True, env=env, stdout=subprocess.DEVNULL)
-        if managed:
-            seed_management(env)
+            configure_kafka_topic(topic, env)
+        seed_management(env)
         for name, command, cwd, health in services:
             log = (state / f"{name}.log").open("a")
             os.chmod(state / f"{name}.log", 0o600)
@@ -288,10 +287,7 @@ def main() -> None:
             if health:
                 wait_http(health, child)
             print(f"{name} started; log: {state / (name + '.log')}", flush=True)
-        if managed:
-            print("Langfuse (sole UI): " + env["AGENTTRACE_LANGFUSE_BASE_URL"], flush=True)
-        else:
-            print("Task console: http://127.0.0.1:" + env.get("AGENTTRACE_LOCAL_WEB_PORT", "5184"), flush=True)
+        print("Langfuse (sole UI): " + env["AGENTTRACE_LANGFUSE_BASE_URL"], flush=True)
         while all(child.poll() is None for child in children):
             time.sleep(1)
         raise RuntimeError("a service exited; inspect its local log")

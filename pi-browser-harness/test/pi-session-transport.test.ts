@@ -1,3 +1,4 @@
+import { genericExecution } from "./fixtures/selected-harness.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import { SessionCleanupError } from "../src/server.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/runtime-mcp-server.mjs", import.meta.url));
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1", run_id: "transport", attempt_id: "transport-attempt",
   goal: "complete the request",
   model: { provider: "scripted", name: "offline-fixture", reasoning_effort: "off" },

@@ -63,9 +63,6 @@ func (s *Store) CheckConversationRunnable(ctx context.Context, conversationID st
 }
 
 func (s *Store) checkConversationRunnable(ctx context.Context, tx pgx.Tx, conversationID string) (Environment, error) {
-	if !s.ManagementEnabled() {
-		return Environment{}, nil
-	}
 	return lockReadyEnvironmentForRun(ctx, tx, conversationID)
 }
 

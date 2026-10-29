@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpClient, StdioTransport } from "@earendil-works/pi-mcp";
 import { expect, it, vi } from "vitest";
+import { browserChildEnv } from "./fixtures/selected-harness.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -45,6 +46,7 @@ it.each([false, true])("an actual MCP child awaits browser DELETE and reports un
     const transport = new StdioTransport({
       command: process.execPath, args: [join(built, "mcp/server.js")],
       env: {
+        ...browserChildEnv,
         AGENTTRACE_HARNESS_WORKER_URL: `http://127.0.0.1:${address.port}`,
         AGENTTRACE_HARNESS_ARTIFACT_SCOPE: "run", AGENTTRACE_HARNESS_GOAL: "open example",
       },
@@ -59,8 +61,8 @@ it.each([false, true])("an actual MCP child awaits browser DELETE and reports un
     const pid = transport.pid!;
     let returned = false;
     const acknowledgement = failedDelete
-      ? client.request("browser/close").then(
-        () => "released",
+      ? client.callTool("close_session", {}).then(
+        (result) => JSON.stringify(result),
         (error: unknown) => error instanceof Error ? error.message : String(error),
       ) : undefined;
     if (!failedDelete) closing = client.close().then(() => { returned = true; });
@@ -71,7 +73,7 @@ it.each([false, true])("an actual MCP child awaits browser DELETE and reports un
       deletion!.statusCode = 503;
       deletion!.end(JSON.stringify({ error: "worker_error", detail: "cleanup uncertain" }));
       expect(await acknowledgement).toContain("cleanup uncertain");
-      await expect(client.request("browser/close")).rejects.toThrow("cleanup uncertain");
+      expect(JSON.stringify(await client.callTool("close_session", {}))).toContain("cleanup uncertain");
       closing = client.close();
     } else {
       deletion!.end(JSON.stringify({ closed: true }));

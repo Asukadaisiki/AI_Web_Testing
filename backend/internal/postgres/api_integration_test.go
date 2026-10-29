@@ -1,10 +1,7 @@
 package postgres
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,22 +34,22 @@ func TestGetProjectReturnsCanonicalMetadata(t *testing.T) {
 func TestGetConversationReturnsRunsAndAttributableMessages(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
-	userMessage, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+	userMessage, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, CreateMessageParams{
 		ConversationID: conversationID,
 		Content:        "verify the cart",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
 		IdempotencyKey: "conversation-history",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create message and run: %v", err)
 	}
 	completedAt := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	if err := store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, "cart passed",
+	if err := finishFixtureRun(t, ctx, store, run.ID, domain.RunSucceeded, nil, "cart passed",
 		event.Envelope[json.RawMessage]{
 			SchemaVersion: "agenttrace.event.v1",
 			EventID:       "evt-conversation-history",
-			EventType:     "runtime.completed",
+			EventType:     event.RunCompleted,
 			AggregateID:   run.ID,
 			CorrelationID: run.ID,
 			OccurredAt:    completedAt,
@@ -112,122 +109,23 @@ func TestCreateRerunIsReturnedByConversationRead(t *testing.T) {
 	}
 }
 
-func TestResponsePersistsMessageAndContinuationOutbox(t *testing.T) {
-	for _, tc := range []struct {
-		kind    string
-		status  string
-		content string
-	}{
-		{kind: "approval", status: "waiting_approval", content: "approved"},
-		{kind: "question", status: "waiting_input", content: "use the staging cart"},
-	} {
-		t.Run(tc.kind, func(t *testing.T) {
-			ctx, pool, store := newRepositoryTestStore(t)
-			conversationID := createConversationFixture(t, ctx, pool)
-			original, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-				ConversationID: conversationID,
-				Content:        "open the cart and verify checkout",
-				AgentID:        "browser-eval",
-				Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
-				IdempotencyKey: "message-1",
-			})
-			if err != nil {
-				t.Fatalf("create run: %v", err)
-			}
-			if _, err := pool.Exec(ctx, `UPDATE runs SET status = $2 WHERE id = $1`, run.ID, tc.status); err != nil {
-				t.Fatalf("put run in response wait: %v", err)
-			}
-
-			if err := store.SubmitResponse(ctx, SubmitResponseParams{
-				RunID:          run.ID,
-				Kind:           tc.kind,
-				Content:        tc.content,
-				IdempotencyKey: "response-1",
-				Continuation:   true,
-			}); err != nil {
-				t.Fatalf("submit response: %v", err)
-			}
-
-			var (
-				content string
-				kind    string
-				topic   string
-				payload []byte
-			)
-			if err := pool.QueryRow(ctx, `
-		SELECT content, metadata ->> 'response_kind'
-		FROM messages
-		WHERE conversation_id = $1
-		ORDER BY ordinal DESC
-		LIMIT 1`, conversationID).Scan(&content, &kind); err != nil {
-				t.Fatalf("read persisted response: %v", err)
-			}
-			if content != tc.content || kind != tc.kind {
-				t.Fatalf("response message = (%q, %q)", content, kind)
-			}
-			if err := pool.QueryRow(ctx, `
-		SELECT topic, payload
-		FROM outbox_events
-		WHERE key = $1
-		  AND topic = $2
-		  AND payload ->> 'event_type' = 'run.continuation.requested'
-		LIMIT 1`, run.ID, runCommandsTopic).Scan(&topic, &payload); err != nil {
-				t.Fatalf("read continuation outbox: %v", err)
-			}
-			if topic != runCommandsTopic {
-				t.Fatalf("continuation topic = %q, want %q", topic, runCommandsTopic)
-			}
-			var envelope event.Envelope[event.RunCommand]
-			if err := json.Unmarshal(payload, &envelope); err != nil {
-				t.Fatalf("decode continuation envelope: %v", err)
-			}
-			if envelope.SchemaVersion != "agenttrace.run-command.v1" {
-				t.Fatalf("continuation schema = %q", envelope.SchemaVersion)
-			}
-			if len(envelope.Payload.Messages) != 2 {
-				t.Fatalf("continuation payload = %#v", envelope.Payload)
-			}
-			if got := envelope.Payload.Messages[0]; got.ID != original.ID || got.Content != original.Content || got.Role != "user" {
-				t.Fatalf("continuation original goal = %#v, want %#v", got, original)
-			}
-			response := envelope.Payload.Messages[1]
-			var metadata map[string]string
-			if err := json.Unmarshal(response.Metadata, &metadata); err != nil {
-				t.Fatalf("decode queued response metadata: %v", err)
-			}
-			if response.Role != "user" || response.Content != tc.content ||
-				metadata["response_kind"] != tc.kind || metadata["run_id"] != run.ID ||
-				envelope.CausationID != response.ID {
-				t.Fatalf("queued response = %#v, metadata = %#v", response, metadata)
-			}
-			gotRun, err := store.GetRun(ctx, run.ID)
-			if err != nil {
-				t.Fatalf("get resumed run: %v", err)
-			}
-			if string(gotRun.Specification) != string(run.Specification) {
-				t.Fatal("response changed the immutable run specification")
-			}
-		})
-	}
-}
-
 func TestCreateMessageQueuesRuntimeCommandSchema(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, CreateMessageParams{
 		ConversationID: conversationID,
 		Content:        "run it",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
 		IdempotencyKey: "message-command-schema",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 	var payload []byte
 	if err := pool.QueryRow(ctx, `
 		SELECT payload FROM outbox_events
-		WHERE key = $1`, run.ID).Scan(&payload); err != nil {
+		WHERE payload->>'aggregate_id' = $1 AND topic='agenttrace.run.commands.v1'`, run.ID).Scan(&payload); err != nil {
 		t.Fatalf("read command outbox: %v", err)
 	}
 	var envelope event.Envelope[event.RunCommand]
@@ -239,50 +137,16 @@ func TestCreateMessageQueuesRuntimeCommandSchema(t *testing.T) {
 	}
 }
 
-func TestLoadRunCommandIncludesPersistedResponse(t *testing.T) {
-	ctx, pool, store := newRepositoryTestStore(t)
-	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-		ConversationID: conversationID,
-		Content:        "need approval",
-		AgentID:        "browser-eval",
-		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
-		IdempotencyKey: "message-response-load",
-	})
-	if err != nil {
-		t.Fatalf("create run: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'waiting_approval' WHERE id = $1`, run.ID); err != nil {
-		t.Fatalf("put run in approval wait: %v", err)
-	}
-	if err := store.SubmitResponse(ctx, SubmitResponseParams{
-		RunID:          run.ID,
-		Kind:           "approval",
-		Content:        "approved",
-		IdempotencyKey: "response-load",
-		Continuation:   true,
-	}); err != nil {
-		t.Fatalf("submit response: %v", err)
-	}
-	_, command, err := store.LoadRunCommand(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("load run command: %v", err)
-	}
-	if len(command.Messages) != 2 || command.Messages[1].Content != "approved" {
-		t.Fatalf("loaded messages = %#v", command.Messages)
-	}
-}
-
 func TestRequestCancelAppendsDurableEvent(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+	_, run, err := store.CreateMessageAndRun(ctx, managedMessageParams(t, ctx, store, CreateMessageParams{
 		ConversationID: conversationID,
 		Content:        "cancel me",
-		AgentID:        "browser-eval",
+
 		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
 		IdempotencyKey: "message-1",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
@@ -305,246 +169,5 @@ func TestRequestCancelAppendsDurableEvent(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("cancellation event count = %d, want 1", events)
-	}
-}
-
-func TestSubmitResponseSerializesWithConcurrentMessageCreation(t *testing.T) {
-	ctx, pool, store := newRepositoryTestStore(t)
-	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-		ConversationID: conversationID,
-		Content:        "need approval",
-		AgentID:        "browser-eval",
-		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
-		IdempotencyKey: "initial-message",
-	})
-	if err != nil {
-		t.Fatalf("create waiting run: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'waiting_approval' WHERE id = $1`, run.ID); err != nil {
-		t.Fatalf("put run in approval wait: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		CREATE OR REPLACE FUNCTION test_delay_message_insert() RETURNS trigger AS $$
-		BEGIN
-			PERFORM pg_sleep(0.1);
-			RETURN NEW;
-		END;
-		$$ LANGUAGE plpgsql;
-		CREATE TRIGGER test_delay_message_insert
-		BEFORE INSERT ON messages
-		FOR EACH ROW EXECUTE FUNCTION test_delay_message_insert();`); err != nil {
-		t.Fatalf("install overlap trigger: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS test_delay_message_insert ON messages`)
-		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS test_delay_message_insert()`)
-	})
-
-	start := make(chan struct{})
-	errs := make(chan error, 2)
-	var workers sync.WaitGroup
-	workers.Add(2)
-	go func() {
-		defer workers.Done()
-		<-start
-		_, _, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-			ConversationID: conversationID,
-			Content:        "ordinary concurrent message",
-			AgentID:        "browser-eval",
-			Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
-			IdempotencyKey: "ordinary-message",
-		})
-		errs <- err
-	}()
-	go func() {
-		defer workers.Done()
-		<-start
-		errs <- store.SubmitResponse(ctx, SubmitResponseParams{
-			RunID:          run.ID,
-			Kind:           "approval",
-			Content:        "approved",
-			IdempotencyKey: "concurrent-response",
-			Continuation:   true,
-		})
-	}()
-	close(start)
-	done := make(chan struct{})
-	go func() {
-		workers.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("concurrent message creation and response insertion deadlocked")
-	}
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent write failed: %v", err)
-		}
-	}
-
-	rows, err := pool.Query(ctx, `
-		SELECT ordinal
-		FROM messages
-		WHERE conversation_id = $1
-		ORDER BY ordinal`, conversationID)
-	if err != nil {
-		t.Fatalf("read message ordinals: %v", err)
-	}
-	defer rows.Close()
-	var ordinals []int64
-	for rows.Next() {
-		var ordinal int64
-		if err := rows.Scan(&ordinal); err != nil {
-			t.Fatalf("scan ordinal: %v", err)
-		}
-		ordinals = append(ordinals, ordinal)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate message ordinals: %v", err)
-	}
-	if got, want := len(ordinals), 3; got != want {
-		t.Fatalf("message count = %d, want %d; ordinals = %#v", got, want, ordinals)
-	}
-	for index, ordinal := range ordinals {
-		if ordinal != int64(index+1) {
-			t.Fatalf("ordinals = %#v, want [1 2 3]", ordinals)
-		}
-	}
-}
-
-func TestFinishRunAndSubmitResponseUseConversationThenRunLockOrder(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, pool, store := newRepositoryTestStore(t)
-	conversationID := createConversationFixture(t, ctx, pool)
-	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
-		ConversationID: conversationID,
-		Content:        "need approval",
-		AgentID:        "browser-eval",
-		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
-		IdempotencyKey: "finish-response-lock-order",
-	})
-	if err != nil {
-		t.Fatalf("create waiting run: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'waiting_approval' WHERE id = $1`, run.ID); err != nil {
-		t.Fatalf("put run in approval wait: %v", err)
-	}
-	const lockKey int64 = 118042026
-	if _, err := pool.Exec(ctx, `
-		CREATE OR REPLACE FUNCTION test_hold_finish_after_run_lock() RETURNS trigger AS $$
-		BEGIN
-			IF NEW.status = 'succeeded' AND OLD.status <> 'succeeded' THEN
-				PERFORM pg_advisory_lock(118042026);
-				PERFORM pg_sleep(0.3);
-				PERFORM pg_advisory_unlock(118042026);
-			END IF;
-			RETURN NEW;
-		END;
-		$$ LANGUAGE plpgsql;
-		CREATE TRIGGER test_hold_finish_after_run_lock
-		BEFORE UPDATE ON runs
-		FOR EACH ROW
-		EXECUTE FUNCTION test_hold_finish_after_run_lock();`); err != nil {
-		t.Fatalf("install finish overlap trigger: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS test_hold_finish_after_run_lock ON runs`)
-		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS test_hold_finish_after_run_lock()`)
-	})
-
-	finishErrs := make(chan error, 1)
-	go func() {
-		finishErrs <- store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, "approved",
-			event.Envelope[json.RawMessage]{
-				SchemaVersion: "agenttrace.event.v1",
-				EventID:       "evt-finish-response-lock-order",
-				EventType:     "runtime.completed",
-				AggregateID:   run.ID,
-				CorrelationID: run.ID,
-				OccurredAt:    time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
-				Payload:       json.RawMessage(`{"status":"succeeded"}`),
-			})
-	}()
-	for {
-		var acquired bool
-		if err := pool.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKey).Scan(&acquired); err != nil {
-			t.Fatalf("observe finish run lock: %v", err)
-		}
-		if !acquired {
-			break
-		}
-		if _, err := pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey); err != nil {
-			t.Fatalf("release probe advisory lock: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("FinishRun did not reach the deterministic overlap point: %v", ctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-
-	responseErrs := make(chan error, 1)
-	go func() {
-		responseErrs <- store.SubmitResponse(ctx, SubmitResponseParams{
-			RunID:          run.ID,
-			Kind:           "approval",
-			Content:        "approved",
-			IdempotencyKey: "finish-response-overlap",
-			Continuation:   true,
-		})
-	}()
-
-	var finishErr, responseErr error
-	select {
-	case finishErr = <-finishErrs:
-	case <-ctx.Done():
-		t.Fatalf("FinishRun timed out: %v", ctx.Err())
-	}
-	select {
-	case responseErr = <-responseErrs:
-	case <-ctx.Done():
-		t.Fatalf("SubmitResponse timed out: %v", ctx.Err())
-	}
-	if finishErr != nil {
-		t.Fatalf("FinishRun failed during lock overlap: %v", finishErr)
-	}
-	if responseErr != nil && !errors.Is(responseErr, ErrConflict) {
-		t.Fatalf("SubmitResponse error = %v, want nil or ErrConflict", responseErr)
-	}
-	finished, err := store.GetRun(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("read serialized run: %v", err)
-	}
-	if finished.Status != domain.RunSucceeded {
-		t.Fatalf("serialized run status = %q, want succeeded", finished.Status)
-	}
-	var messageCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE conversation_id = $1`, conversationID).Scan(&messageCount); err != nil {
-		t.Fatalf("count serialized messages: %v", err)
-	}
-	if responseErr == nil && messageCount != 3 {
-		t.Fatalf("successful response messages = %d, want 3", messageCount)
-	}
-	if errors.Is(responseErr, ErrConflict) && messageCount != 2 {
-		t.Fatalf("conflicted response messages = %d, want 2", messageCount)
-	}
-}
-
-func TestSubmitResponseMissingRunReturnsNotFound(t *testing.T) {
-	ctx, _, store := newRepositoryTestStore(t)
-	err := store.SubmitResponse(ctx, SubmitResponseParams{
-		RunID:          "run_missing",
-		Kind:           "approval",
-		Content:        "approved",
-		IdempotencyKey: "missing-run",
-		Continuation:   true,
-	})
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("submit response error = %v, want ErrNotFound", err)
 	}
 }

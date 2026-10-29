@@ -24,7 +24,7 @@ func TestPostgresHarnessCompletionExportsAllOutcomesWithRetryAndDeduplication(t 
 	for _, status := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed, domain.RunCancelled} {
 		t.Run(string(status), func(t *testing.T) {
 			ctx, pool, store := newExporterPostgresStore(t)
-			project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "completion"})
+			project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "completion", LangfuseProjectID: "lf-completion"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -32,14 +32,34 @@ func TestPostgresHarnessCompletionExportsAllOutcomesWithRetryAndDeduplication(t 
 			if err != nil {
 				t.Fatal(err)
 			}
+			version := testpostgres.PrepareManagedConversation(t, ctx, pool, conversation.ID)
 			_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
-				ConversationID: conversation.ID, Content: "actual goal", AgentID: "browser-eval",
+				ConversationID: conversation.ID, Content: "actual goal",
+				RuntimeID: "pi", HarnessVersionID: version,
 				Model: event.ModelRef{Provider: "pi", Name: "model"}, IdempotencyKey: t.Name(),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "provider-1")
+			env, err := store.GetConversationEnvironment(ctx, conversation.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, worker := range []postgres.WorkerRegistration{
+				{ID: "runtime", Role: "runtime", Capacity: 1},
+				{ID: "browser", Role: "browser", Capacity: 1, Endpoint: "http://browser:8100"},
+			} {
+				if _, err := store.RegisterWorker(ctx, worker); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.BindEnvironmentWorker(ctx, env.ID, "browser"); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := store.ClaimHarnessLease(ctx, postgres.LeaseClaim{
+				RunID: run.ID, ProjectID: project.ID, EnvironmentID: env.ID, RuntimeWorkerID: "runtime",
+				ProfileGeneration: 1, RuntimeID: "pi", ProviderAttemptID: "provider-1",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,7 +69,7 @@ func TestPostgresHarnessCompletionExportsAllOutcomesWithRetryAndDeduplication(t 
 				}
 			}
 			finish := postgres.HarnessFinish{
-				RunID: run.ID, AttemptID: attempt.ID, Status: status,
+				RunID: run.ID, AttemptID: claim.Attempt.ID, Fence: claim.Fence, Status: status,
 				Event: event.Envelope[json.RawMessage]{
 					SchemaVersion: "agenttrace.event.v1", EventID: "completion",
 					EventType: event.RunCompleted, AggregateID: run.ID,

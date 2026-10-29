@@ -1,3 +1,4 @@
+import { genericExecution } from "./fixtures/selected-harness.js";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import {
 import type { HarnessEvent, RunRequest } from "../src/run-protocol.js";
 
 const request: RunRequest = {
+  execution: genericExecution,
   protocol_version: "pi-browser-harness.v1",
   run_id: "run",
   attempt_id: "one",

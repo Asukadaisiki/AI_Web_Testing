@@ -67,7 +67,7 @@ func controlGatewayWithProvider(t *testing.T, providerAddress string) *controlGa
 		t.Fatal(err)
 	}
 	f.store = postgres.NewStore(f.pool)
-	f.store.SetManagementEnabled(true)
+
 	if err := f.store.SetEnvironmentDefaultPolicy([]string{"127.0.0.1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,11 +177,11 @@ func controlGatewayWithProvider(t *testing.T, providerAddress string) *controlGa
 		t.Fatal(err)
 	}
 	f.env, _ = f.store.GetEnvironment(f.ctx, f.env.ID)
-	server := &Server{repository: f.store, browserProvider: f.provider, management: true}
+	server := &Server{repository: f.store, browserProvider: f.provider}
 	mux := http.NewServeMux()
 	server.registerControlSessionRoutes(mux)
 	server.registerEnvironmentRoutes(mux)
-	f.handler = server.bridgeGuard(mux, ServerConfig{BridgeToken: testBridgeToken}, true)
+	f.handler = server.bridgeGuard(mux, ServerConfig{BridgeToken: testBridgeToken})
 	return f
 }
 
@@ -358,12 +358,12 @@ func TestControlGatewayInflightInputExcludesStopAndReset(t *testing.T) {
 
 func TestControlGatewayServerConstructorRegistersManagementOnly(t *testing.T) {
 	f := controlGateway(t)
-	f.handler = New(ServerConfig{Repository: f.store, ManagementEnabled: true,
+	f.handler = New(ServerConfig{Repository: f.store,
 		BridgeToken: testBridgeToken, BrowserProvider: f.provider}).Handler()
 	f.create(t)
 	f.handler = New(ServerConfig{Repository: f.store, BrowserProvider: f.provider}).Handler()
-	if got := f.request("GET", "/api/v1/control-sessions/unknown", "", "actor"); got.Code != 404 {
-		t.Fatalf("management-disabled gateway=%d", got.Code)
+	if got := f.request("GET", "/api/v1/control-sessions/unknown", "", "actor"); got.Code != 503 {
+		t.Fatalf("unconfigured bridge must fail closed, gateway=%d", got.Code)
 	}
 }
 
